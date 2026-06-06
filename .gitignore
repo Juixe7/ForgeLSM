@@ -1,0 +1,10 @@
+*.exe
+*.o
+*.obj
+stdb
+test_wal.bin
+output.txt
+flsm_production/
+flsm_verify_lab/
+flsm_bench_dir/
+test_flsm/

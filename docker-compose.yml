@@ -1,0 +1,24 @@
+version: '3.9'
+
+services:
+  forgelsm:
+    build: .
+    container_name: forgelsm-introspector
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist engine data across container restarts
+      - forgelsm_data:/app/flsm_production
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  forgelsm_data:
+    driver: local
