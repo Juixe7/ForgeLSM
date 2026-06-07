@@ -6,10 +6,15 @@ const els = {
   statusPill: document.getElementById('status-pill'),
   statusText: document.getElementById('status-text'),
   refreshState: document.getElementById('refresh-state'),
+  prodRun: document.getElementById('prod-run'),
+  prodEvents: document.getElementById('prod-events'),
+  prodDevices: document.getElementById('prod-devices'),
+  prodRaw: document.getElementById('prod-raw'),
+  prodTrace: document.getElementById('prod-trace'),
   verifyRun: document.getElementById('verify-run'),
   verifyOps: document.getElementById('verify-ops'),
   matrix: document.getElementById('verification-matrix'),
-  raw: document.getElementById('verify-raw'),
+  verifyRaw: document.getElementById('verify-raw'),
 };
 
 function byId(id) {
@@ -17,8 +22,7 @@ function byId(id) {
 }
 
 function fmtNum(value) {
-  const n = Number(value || 0);
-  return n.toLocaleString('en-IN');
+  return Number(value || 0).toLocaleString('en-IN');
 }
 
 function fmtBytes(value) {
@@ -37,6 +41,15 @@ function fmtAmp(value) {
 function setText(id, value) {
   const el = byId(id);
   if (el) el.textContent = value;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 function setConnected(ok, message) {
@@ -75,7 +88,7 @@ function renderSystem(metrics, lsm, debug) {
 
 function renderStorage(files) {
   const fileRows = [];
-  fileRows.push(`<tr><th>Manifest</th><td>${files.manifest_loaded ? 'loaded' : 'missing'}</td><td>${fmtBytes(files.manifest_bytes)}</td></tr>`);
+  fileRows.push(`<tr><th>Manifest</th><td>${files.manifest_loaded ? 'loaded' : 'not created yet'}</td><td>${fmtBytes(files.manifest_bytes)}</td></tr>`);
 
   if (Array.isArray(files.wal_files) && files.wal_files.length) {
     files.wal_files.forEach((wal) => {
@@ -89,31 +102,23 @@ function renderStorage(files) {
   fileRows.push(`<tr><th>VLog</th><td>${vlog.exists ? escapeHtml(vlog.file) : 'missing'}</td><td>${fmtBytes(vlog.bytes)}</td></tr>`);
   byId('file-log-body').innerHTML = fileRows.join('');
 
-  const sstableRows = [];
+  const rows = [];
   const sstables = Array.isArray(files.sstables) ? files.sstables : [];
   const unreferenced = Array.isArray(files.unreferenced_sstables) ? files.unreferenced_sstables : [];
 
   sstables.forEach((sst) => {
-    sstableRows.push(
-      `<tr><td>${escapeHtml(sst.level)}</td><td>${escapeHtml(sst.file)}</td><td>${fmtBytes(sst.bytes)}</td><td>${sst.exists ? 'yes' : 'no'}</td></tr>`
-    );
+    rows.push(`<tr><td>${escapeHtml(sst.level)}</td><td>${escapeHtml(sst.file)}</td><td>${fmtBytes(sst.bytes)}</td><td>${sst.exists ? 'yes' : 'no'}</td></tr>`);
   });
   unreferenced.forEach((sst) => {
-    sstableRows.push(
-      `<tr class="warning-row"><td>unreferenced</td><td>${escapeHtml(sst.file)}</td><td>${fmtBytes(sst.bytes)}</td><td>orphan</td></tr>`
-    );
+    rows.push(`<tr class="warning-row"><td>unreferenced</td><td>${escapeHtml(sst.file)}</td><td>${fmtBytes(sst.bytes)}</td><td>orphan</td></tr>`);
   });
 
-  byId('sstable-body').innerHTML = sstableRows.length
-    ? sstableRows.join('')
-    : '<tr><td colspan="4">No SSTables in manifest yet. Run flush or compaction verification.</td></tr>';
+  byId('sstable-body').innerHTML = rows.length
+    ? rows.join('')
+    : '<tr><td colspan="4">No production SSTables yet. Run a large production workload to cross the 4 MB flush threshold.</td></tr>';
 }
 
-function renderStateRaw(metrics, lsm, debug, files) {
-  els.raw.textContent = JSON.stringify({metrics, lsm_state: lsm, debug_state: debug, files}, null, 2);
-}
-
-async function refreshState() {
+async function refreshState(writeRaw = true) {
   try {
     const [metrics, lsm, debug, files] = await Promise.all([
       getJson('/api/metrics'),
@@ -124,7 +129,9 @@ async function refreshState() {
     setConnected(true);
     renderSystem(metrics, lsm, debug);
     renderStorage(files);
-    renderStateRaw(metrics, lsm, debug, files);
+    if (writeRaw) {
+      els.prodRaw.textContent = JSON.stringify({metrics, lsm_state: lsm, debug_state: debug, files}, null, 2);
+    }
   } catch (err) {
     setConnected(false, err.message);
   }
@@ -134,6 +141,54 @@ function statusClass(status) {
   if (status === 'pass') return 'pass';
   if (status === 'fail') return 'fail';
   return 'pending';
+}
+
+function renderTrace(trace) {
+  const rows = Array.isArray(trace) ? trace : [];
+  els.prodTrace.innerHTML = rows.length
+    ? rows.map((entry) => `
+        <div class="step-row pass">
+          <div class="step-status">${escapeHtml(entry.phase || 'trace')}</div>
+          <div>
+            <div class="step-name">${escapeHtml(entry.phase || 'operation')}</div>
+            <div class="step-detail">${escapeHtml(entry.detail || '')}</div>
+          </div>
+        </div>
+      `).join('')
+    : '<div class="empty-state">No trace entries returned.</div>';
+}
+
+function setProductionBusy(isBusy) {
+  els.prodRun.disabled = isBusy;
+  els.prodRun.textContent = isBusy ? 'Writing...' : 'Write To Production';
+}
+
+async function runProductionWorkload() {
+  const events = parseInt(els.prodEvents.value, 10);
+  const devices = parseInt(els.prodDevices.value, 10);
+  setProductionBusy(true);
+  setText('prod-status', 'RUNNING');
+  byId('prod-status').className = 'pending';
+
+  try {
+    const result = await postJson('/api/iot/bulk', {events, devices});
+    setText('prod-status', String(result.status || 'fail').toUpperCase());
+    byId('prod-status').className = statusClass(result.status);
+    setText('prod-written', fmtNum(result.events_written));
+    setText('prod-mismatches', fmtNum(result.sample_mismatches));
+    byId('prod-mismatches').className = Number(result.sample_mismatches || 0) === 0 ? 'pass' : 'fail';
+    setText('prod-throughput', `${fmtNum(Math.round(result.throughput || 0))} ops/s`);
+    renderTrace(result.trace);
+    els.prodRaw.textContent = JSON.stringify(result, null, 2);
+    await refreshState(false);
+  } catch (err) {
+    setText('prod-status', 'FAIL');
+    byId('prod-status').className = 'fail';
+    els.prodRaw.textContent = JSON.stringify({error: err.message}, null, 2);
+    renderTrace([{phase: 'error', detail: err.message}]);
+  } finally {
+    setProductionBusy(false);
+  }
 }
 
 function setMatrixCell(test, status) {
@@ -146,23 +201,19 @@ function setMatrixCell(test, status) {
 function renderVerification(result) {
   const status = result.status || 'fail';
   const mismatches = Array.isArray(result.mismatches) ? result.mismatches.length : 0;
-  const bloomSkips = Number(result.bloom_skips || 0);
 
   setText('verify-status', status.toUpperCase());
   byId('verify-status').className = statusClass(status);
   setText('verify-recovered', fmtNum(result.post_recovery_checked || 0));
   setText('verify-mismatches', fmtNum(mismatches));
   byId('verify-mismatches').className = mismatches === 0 ? 'pass' : 'fail';
-  setText('verify-bloom', fmtNum(bloomSkips));
+  setText('verify-bloom', fmtNum(result.bloom_skips || 0));
 
   setText('ev-test', result.test || '-');
   setText('ev-requested', fmtNum(result.requested_events || 0));
   setText('ev-model', fmtNum(result.model_live_keys || 0));
   setText('ev-flush', `L0 ${result.l0_before_flush || 0} -> ${result.l0_after_flush || 0}`);
-  setText(
-    'ev-compaction',
-    `L0 ${result.l0_before_compaction || 0} -> ${result.l0_after_compaction || 0}; L1 ${result.l1_before_compaction || 0} -> ${result.l1_after_compaction || 0}`
-  );
+  setText('ev-compaction', `L0 ${result.l0_before_compaction || 0} -> ${result.l0_after_compaction || 0}; L1 ${result.l1_before_compaction || 0} -> ${result.l1_after_compaction || 0}`);
   setText('ev-deletes', `${fmtNum(result.deleted_checked || 0)} checked, ${fmtNum(result.deleted_found || 0)} found`);
   setText('ev-gc', `${fmtBytes(result.vlog_before_gc || 0)} -> ${fmtBytes(result.vlog_after_gc || 0)}`);
 
@@ -184,10 +235,10 @@ function renderVerification(result) {
       `).join('')
     : '<div class="empty-state">No proof steps were returned.</div>';
 
-  els.raw.textContent = JSON.stringify(result, null, 2);
+  els.verifyRaw.textContent = JSON.stringify(result, null, 2);
 }
 
-function setBusy(isBusy, label) {
+function setVerificationBusy(isBusy, label) {
   els.verifyRun.disabled = isBusy;
   document.querySelectorAll('.matrix-btn').forEach((btn) => {
     btn.disabled = isBusy;
@@ -197,13 +248,12 @@ function setBusy(isBusy, label) {
 
 async function runVerification(test) {
   const ops = parseInt(els.verifyOps.value, 10);
-  setBusy(true, test);
+  setVerificationBusy(true, test);
   setMatrixCell(test === 'full' ? 'basic' : test, 'running');
   try {
     const result = await postJson(`/api/verify/${test}`, {ops});
     renderVerification(result);
-    await refreshState();
-    els.raw.textContent = JSON.stringify(result, null, 2);
+    await refreshState(false);
   } catch (err) {
     renderVerification({
       test,
@@ -213,20 +263,21 @@ async function runVerification(test) {
       steps: [{name: 'Verification request', status: 'fail', detail: err.message}],
     });
   } finally {
-    setBusy(false, test);
+    setVerificationBusy(false, test);
   }
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
+document.querySelectorAll('.tab-btn').forEach((button) => {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach((btn) => btn.classList.remove('active'));
+    document.querySelectorAll('.view').forEach((view) => view.classList.remove('active'));
+    button.classList.add('active');
+    byId(button.dataset.view).classList.add('active');
+  });
+});
 
-els.refreshState.addEventListener('click', refreshState);
+els.refreshState.addEventListener('click', () => refreshState(true));
+els.prodRun.addEventListener('click', runProductionWorkload);
 els.verifyRun.addEventListener('click', () => runVerification('full'));
 els.matrix.addEventListener('click', (event) => {
   const button = event.target.closest('.matrix-btn');
@@ -235,4 +286,4 @@ els.matrix.addEventListener('click', (event) => {
 });
 
 refreshState();
-setInterval(refreshState, POLL_INTERVAL_MS);
+setInterval(() => refreshState(false), POLL_INTERVAL_MS);

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ForgeLSM Verification Console</title>
-  <meta name="description" content="Audit console for ForgeLSM, a local-first WiscKey-style LSM storage engine." />
+  <title>ForgeLSM Console</title>
+  <meta name="description" content="Production IoT and verification console for ForgeLSM." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -14,7 +14,7 @@
   <header class="topbar">
     <div>
       <div class="brand-name">ForgeLSM</div>
-      <div class="brand-subtitle">Local Edge Event Store Verification Console</div>
+      <div class="brand-subtitle">Local Edge Event Store Console</div>
     </div>
     <div class="topbar-right">
       <div class="connection-pill" id="status-pill">
@@ -25,133 +25,204 @@
     </div>
   </header>
 
-  <main class="audit-shell">
-    <section class="audit-panel system-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>System State</h1>
-          <p>Live production store: <code>flsm_production</code></p>
-        </div>
-        <button class="secondary-btn" id="refresh-state">Refresh</button>
+  <nav class="view-tabs" aria-label="Console views">
+    <button class="tab-btn active" data-view="production-view">Production IoT</button>
+    <button class="tab-btn" data-view="verification-view">Verification Lab</button>
+  </nav>
+
+  <main class="console-shell">
+    <section class="view active" id="production-view">
+      <div class="audit-shell">
+        <section class="audit-panel system-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Production System State</h1>
+              <p>Live production store: <code>flsm_production</code></p>
+            </div>
+            <button class="secondary-btn" id="refresh-state">Refresh</button>
+          </div>
+          <table class="audit-table">
+            <tbody>
+              <tr><th>Memtable entries</th><td id="state-mem-entries">-</td></tr>
+              <tr><th>Memtable bytes</th><td id="state-mem-bytes">-</td></tr>
+              <tr><th>Flush threshold</th><td id="state-flush-threshold">-</td></tr>
+              <tr><th>L0 SSTables</th><td id="state-l0">-</td></tr>
+              <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
+              <tr><th>WAL status</th><td id="state-wal">-</td></tr>
+              <tr><th>Write amplification</th><td id="state-write-amp">-</td></tr>
+              <tr><th>Read amplification</th><td id="state-read-amp">-</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="audit-panel workload-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Production IoT Workload</h1>
+              <p>Writes generated sensor readings into the live engine so storage changes are visible.</p>
+            </div>
+          </div>
+          <div class="control-row">
+            <label>
+              Event count
+              <select id="prod-events">
+                <option value="1000">1K events</option>
+                <option value="10000" selected>10K events</option>
+                <option value="25000">25K events</option>
+                <option value="50000">50K events</option>
+                <option value="100000">100K events</option>
+              </select>
+            </label>
+            <label>
+              Devices
+              <select id="prod-devices">
+                <option value="8">8 devices</option>
+                <option value="16" selected>16 devices</option>
+                <option value="64">64 devices</option>
+                <option value="256">256 devices</option>
+              </select>
+            </label>
+            <button class="primary-btn" id="prod-run">Write To Production</button>
+          </div>
+          <div class="workload-summary">
+            <div><span>Status</span><strong id="prod-status">Not run</strong></div>
+            <div><span>Events written</span><strong id="prod-written">-</strong></div>
+            <div><span>Sample mismatches</span><strong id="prod-mismatches">-</strong></div>
+            <div><span>Throughput</span><strong id="prod-throughput">-</strong></div>
+          </div>
+        </section>
+
+        <section class="audit-panel internals-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Production Storage Internals</h1>
+              <p>Actual WAL, VLog, Manifest, and SSTable files visible to the production engine.</p>
+            </div>
+          </div>
+          <div class="internals-grid">
+            <table class="audit-table">
+              <caption>WAL and VLog</caption>
+              <tbody id="file-log-body">
+                <tr><td colspan="3">Loading...</td></tr>
+              </tbody>
+            </table>
+            <table class="audit-table">
+              <caption>SSTables From Manifest</caption>
+              <thead><tr><th>Level</th><th>File</th><th>Bytes</th><th>Exists</th></tr></thead>
+              <tbody id="sstable-body">
+                <tr><td colspan="4">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="audit-panel raw-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Production Evidence</h1>
+              <p>Latest production state or workload result.</p>
+            </div>
+          </div>
+          <pre id="prod-raw">{}</pre>
+        </section>
+
+        <section class="audit-panel trace-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Operation Trace</h1>
+              <p>Compact background trace from the latest production workload.</p>
+            </div>
+          </div>
+          <div class="step-list" id="prod-trace">
+            <div class="empty-state">Run a production workload to see the trace.</div>
+          </div>
+        </section>
       </div>
-      <table class="audit-table">
-        <tbody>
-          <tr><th>Memtable entries</th><td id="state-mem-entries">-</td></tr>
-          <tr><th>Memtable bytes</th><td id="state-mem-bytes">-</td></tr>
-          <tr><th>Flush threshold</th><td id="state-flush-threshold">-</td></tr>
-          <tr><th>L0 SSTables</th><td id="state-l0">-</td></tr>
-          <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
-          <tr><th>WAL status</th><td id="state-wal">-</td></tr>
-          <tr><th>Write amplification</th><td id="state-write-amp">-</td></tr>
-          <tr><th>Read amplification</th><td id="state-read-amp">-</td></tr>
-        </tbody>
-      </table>
     </section>
 
-    <section class="audit-panel workload-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Edge Event Workload</h1>
-          <p>Runs isolated deterministic IoT workloads and compares results with a reference model.</p>
-        </div>
-      </div>
-      <div class="control-row">
-        <label>
-          Event count
-          <select id="verify-ops">
-            <option value="1000">1K events</option>
-            <option value="10000" selected>10K events</option>
-            <option value="25000">25K events</option>
-            <option value="50000">50K events</option>
-            <option value="100000">100K events</option>
-          </select>
-        </label>
-        <button class="primary-btn" id="verify-run">Run Full Verification</button>
-      </div>
-      <div class="workload-summary">
-        <div><span>Status</span><strong id="verify-status">Not run</strong></div>
-        <div><span>Recovered keys</span><strong id="verify-recovered">-</strong></div>
-        <div><span>Mismatches</span><strong id="verify-mismatches">-</strong></div>
-        <div><span>Bloom skips</span><strong id="verify-bloom">-</strong></div>
+    <section class="view" id="verification-view">
+      <div class="audit-shell">
+        <section class="audit-panel workload-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Verification Workload</h1>
+              <p>Runs isolated deterministic IoT workloads in <code>flsm_verify_lab</code>.</p>
+            </div>
+          </div>
+          <div class="control-row">
+            <label>
+              Event count
+              <select id="verify-ops">
+                <option value="1000">1K events</option>
+                <option value="10000" selected>10K events</option>
+                <option value="25000">25K events</option>
+                <option value="50000">50K events</option>
+                <option value="100000">100K events</option>
+              </select>
+            </label>
+            <button class="primary-btn" id="verify-run">Run Full Verification</button>
+          </div>
+          <div class="workload-summary">
+            <div><span>Status</span><strong id="verify-status">Not run</strong></div>
+            <div><span>Recovered keys</span><strong id="verify-recovered">-</strong></div>
+            <div><span>Mismatches</span><strong id="verify-mismatches">-</strong></div>
+            <div><span>Bloom skips</span><strong id="verify-bloom">-</strong></div>
+          </div>
+        </section>
+
+        <section class="audit-panel matrix-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Verification Matrix</h1>
+              <p>Run feature-specific proofs without touching production data.</p>
+            </div>
+          </div>
+          <div class="verification-matrix" id="verification-matrix">
+            <button class="matrix-btn" data-test="basic"><span>Basic Put/Get</span><strong id="matrix-basic">Not run</strong></button>
+            <button class="matrix-btn" data-test="overwrite"><span>Overwrite</span><strong id="matrix-overwrite">Not run</strong></button>
+            <button class="matrix-btn" data-test="delete"><span>Delete/Tombstone</span><strong id="matrix-delete">Not run</strong></button>
+            <button class="matrix-btn" data-test="flush"><span>Flush/SSTable</span><strong id="matrix-flush">Not run</strong></button>
+            <button class="matrix-btn" data-test="bloom"><span>Bloom Filter</span><strong id="matrix-bloom">Not run</strong></button>
+            <button class="matrix-btn" data-test="compaction"><span>Compaction</span><strong id="matrix-compaction">Not run</strong></button>
+            <button class="matrix-btn" data-test="recovery"><span>Recovery</span><strong id="matrix-recovery">Not run</strong></button>
+            <button class="matrix-btn partial" data-test="gc"><span>VLog GC</span><strong id="matrix-gc">Partial</strong></button>
+          </div>
+        </section>
+
+        <section class="audit-panel evidence-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Verification Evidence</h1>
+              <p>Selected verification result with exact counts and structural transitions.</p>
+            </div>
+          </div>
+          <table class="audit-table evidence-table">
+            <tbody>
+              <tr><th>Test</th><td id="ev-test">-</td></tr>
+              <tr><th>Requested events</th><td id="ev-requested">-</td></tr>
+              <tr><th>Model live keys</th><td id="ev-model">-</td></tr>
+              <tr><th>L0 flush transition</th><td id="ev-flush">-</td></tr>
+              <tr><th>Compaction transition</th><td id="ev-compaction">-</td></tr>
+              <tr><th>Deleted keys checked</th><td id="ev-deletes">-</td></tr>
+              <tr><th>VLog GC bytes</th><td id="ev-gc">-</td></tr>
+            </tbody>
+          </table>
+          <div class="step-list" id="verify-steps">
+            <div class="empty-state">Run a verification test to see proof steps.</div>
+          </div>
+        </section>
+
+        <section class="audit-panel raw-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Raw Verification JSON</h1>
+              <p>Raw API payload from the most recent verification run.</p>
+            </div>
+          </div>
+          <pre id="verify-raw">{}</pre>
+        </section>
       </div>
     </section>
-
-    <section class="audit-panel matrix-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Verification Matrix</h1>
-          <p>Run feature-specific proofs. Each test uses <code>flsm_verify_lab</code> and leaves production data untouched.</p>
-        </div>
-      </div>
-      <div class="verification-matrix" id="verification-matrix">
-        <button class="matrix-btn" data-test="basic"><span>Basic Put/Get</span><strong id="matrix-basic">Not run</strong></button>
-        <button class="matrix-btn" data-test="overwrite"><span>Overwrite</span><strong id="matrix-overwrite">Not run</strong></button>
-        <button class="matrix-btn" data-test="delete"><span>Delete/Tombstone</span><strong id="matrix-delete">Not run</strong></button>
-        <button class="matrix-btn" data-test="flush"><span>Flush/SSTable</span><strong id="matrix-flush">Not run</strong></button>
-        <button class="matrix-btn" data-test="bloom"><span>Bloom Filter</span><strong id="matrix-bloom">Not run</strong></button>
-        <button class="matrix-btn" data-test="compaction"><span>Compaction</span><strong id="matrix-compaction">Not run</strong></button>
-        <button class="matrix-btn" data-test="recovery"><span>Recovery</span><strong id="matrix-recovery">Not run</strong></button>
-        <button class="matrix-btn partial" data-test="gc"><span>VLog GC</span><strong id="matrix-gc">Partial</strong></button>
-      </div>
-    </section>
-
-    <section class="audit-panel internals-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Storage Internals</h1>
-          <p>Actual files currently visible to the production engine.</p>
-        </div>
-      </div>
-      <div class="internals-grid">
-        <table class="audit-table">
-          <caption>WAL and VLog</caption>
-          <tbody id="file-log-body">
-            <tr><td colspan="3">Loading...</td></tr>
-          </tbody>
-        </table>
-        <table class="audit-table">
-          <caption>SSTables From Manifest</caption>
-          <thead><tr><th>Level</th><th>File</th><th>Bytes</th><th>Exists</th></tr></thead>
-          <tbody id="sstable-body">
-            <tr><td colspan="4">Loading...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="audit-panel evidence-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Evidence Details</h1>
-          <p>Selected verification result with exact counts and structural transitions.</p>
-        </div>
-      </div>
-      <table class="audit-table evidence-table">
-        <tbody>
-          <tr><th>Test</th><td id="ev-test">-</td></tr>
-          <tr><th>Requested events</th><td id="ev-requested">-</td></tr>
-          <tr><th>Model live keys</th><td id="ev-model">-</td></tr>
-          <tr><th>L0 flush transition</th><td id="ev-flush">-</td></tr>
-          <tr><th>Compaction transition</th><td id="ev-compaction">-</td></tr>
-          <tr><th>Deleted keys checked</th><td id="ev-deletes">-</td></tr>
-          <tr><th>VLog GC bytes</th><td id="ev-gc">-</td></tr>
-        </tbody>
-      </table>
-      <div class="step-list" id="verify-steps">
-        <div class="empty-state">Run a verification test to see proof steps.</div>
-      </div>
-    </section>
-
-    <section class="audit-panel raw-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Raw JSON Result Viewer</h1>
-          <p>Raw API payload from the most recent verification or state refresh.</p>
-        </div>
-      </div>
-      <pre id="verify-raw">{}</pre>
-    </section>
-
   </main>
 
   <script src="/app.js"></script>

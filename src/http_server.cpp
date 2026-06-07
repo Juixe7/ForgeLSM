@@ -288,6 +288,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/get")    return handle_get(req);
         if (req.path == "/api/delete") return handle_delete(req);
         if (req.path == "/api/bench")  return handle_bench(req);
+        if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
         if (req.path == "/api/verify/basic") return handle_verify(req, "basic");
         if (req.path == "/api/verify/overwrite") return handle_verify(req, "overwrite");
         if (req.path == "/api/verify/delete") return handle_verify(req, "delete");
@@ -705,6 +706,119 @@ HttpResponse HttpServer::handle_bench(const HttpRequest& req) {
     j << json_dbl ("throughput",      throughput);
     j << json_dbl ("write_amp",       write_amp);
     j << json_dbl ("read_amp",        read_amp, true);
+    j << "}";
+
+    HttpResponse resp;
+    resp.body = j.str();
+    return resp;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// POST /api/iot/bulk — production IoT event generator
+// Writes deterministic sensor events into the live production store.
+// ─────────────────────────────────────────────────────────────────
+HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
+    long long requested_events = json_get_int(req.body, "events", 1000);
+    long long requested_devices = json_get_int(req.body, "devices", 16);
+    if (requested_events < 1) requested_events = 1;
+    if (requested_events > 100000) requested_events = 100000;
+    if (requested_devices < 1) requested_devices = 1;
+    if (requested_devices > 1000) requested_devices = 1000;
+
+    const uint64_t l0_before = static_cast<uint64_t>(store_.l0_count());
+    const uint64_t l1_before = static_cast<uint64_t>(store_.l1_count());
+    const uint64_t mem_before = static_cast<uint64_t>(store_.memtable_entries());
+    const uint64_t user_before = store_.metrics().user_bytes_written;
+    const uint64_t storage_before = store_.metrics().storage_bytes_written;
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    std::vector<std::string> sample_keys;
+    std::vector<std::string> sample_values;
+
+    try {
+        for (long long i = 0; i < requested_events; ++i) {
+            long long device = i % requested_devices;
+            long long minute = i / requested_devices;
+            double temperature = 20.0 + static_cast<double>((i * 37) % 1700) / 100.0;
+            double vibration = 0.15 + static_cast<double>((i * 17) % 900) / 1000.0;
+            double voltage = 218.0 + static_cast<double>((i * 29) % 900) / 100.0;
+            std::string status = (i % 97 == 0) ? "alert" : "normal";
+
+            char key_buf[96];
+            std::snprintf(key_buf, sizeof(key_buf), "iot:device_%04lld:event_%010lld", device, i);
+
+            std::ostringstream value;
+            value << "{\"device_id\":\"device_" << std::setw(4) << std::setfill('0') << device << "\","
+                  << "\"site\":\"edge_lab_A\","
+                  << "\"sensor\":\"machine_health\","
+                  << "\"timestamp_minute\":" << minute << ","
+                  << "\"sequence\":" << i << ","
+                  << "\"temperature_c\":" << std::fixed << std::setprecision(2) << temperature << ","
+                  << "\"vibration_g\":" << std::fixed << std::setprecision(3) << vibration << ","
+                  << "\"voltage_v\":" << std::fixed << std::setprecision(2) << voltage << ","
+                  << "\"status\":\"" << status << "\"}";
+
+            std::string key = key_buf;
+            std::string payload = value.str();
+            store_.put(key, payload);
+
+            if (i == 0 || i == requested_events / 2 || i == requested_events - 1) {
+                sample_keys.push_back(key);
+                sample_values.push_back(payload);
+            }
+        }
+    } catch (const std::exception& e) {
+        HttpResponse resp;
+        resp.status = 500;
+        resp.body = std::string(R"({"error":")") + json_escape(e.what()) + "\"}";
+        return resp;
+    }
+
+    uint64_t sample_checked = 0;
+    uint64_t sample_mismatches = 0;
+    for (size_t i = 0; i < sample_keys.size(); ++i) {
+        std::string actual;
+        bool found = store_.get(sample_keys[i], actual);
+        sample_checked++;
+        if (!found || actual != sample_values[i]) sample_mismatches++;
+    }
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double elapsed_s = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() / 1000.0;
+    double throughput = elapsed_s > 0 ? static_cast<double>(requested_events) / elapsed_s : 0.0;
+
+    const uint64_t l0_after = static_cast<uint64_t>(store_.l0_count());
+    const uint64_t l1_after = static_cast<uint64_t>(store_.l1_count());
+    const uint64_t mem_after = static_cast<uint64_t>(store_.memtable_entries());
+    const uint64_t user_delta = store_.metrics().user_bytes_written - user_before;
+    const uint64_t storage_delta = store_.metrics().storage_bytes_written - storage_before;
+
+    std::ostringstream j;
+    j << "{\n";
+    j << json_str("status", sample_mismatches == 0 ? "pass" : "fail");
+    j << json_num("events_requested", static_cast<uint64_t>(requested_events));
+    j << json_num("events_written", static_cast<uint64_t>(requested_events));
+    j << json_num("devices", static_cast<uint64_t>(requested_devices));
+    j << json_num("sample_checked", sample_checked);
+    j << json_num("sample_mismatches", sample_mismatches);
+    j << json_num("memtable_entries_before", mem_before);
+    j << json_num("memtable_entries_after", mem_after);
+    j << json_num("l0_before", l0_before);
+    j << json_num("l0_after", l0_after);
+    j << json_num("l1_before", l1_before);
+    j << json_num("l1_after", l1_after);
+    j << json_num("user_bytes_delta", user_delta);
+    j << json_num("storage_bytes_delta", storage_delta);
+    j << json_dbl("elapsed_s", elapsed_s);
+    j << json_dbl("throughput", throughput);
+    j << "  \"trace\": [";
+    j << "{\"phase\":\"write\",\"detail\":\"Generated " << requested_events
+      << " deterministic IoT JSON payloads across " << requested_devices << " devices\"},";
+    j << "{\"phase\":\"storage\",\"detail\":\"L0 changed " << l0_before << " -> " << l0_after
+      << ", L1 changed " << l1_before << " -> " << l1_after << "\"},";
+    j << "{\"phase\":\"sample-read\",\"detail\":\"Checked " << sample_checked
+      << " representative keys with " << sample_mismatches << " mismatches\"}";
+    j << "]\n";
     j << "}";
 
     HttpResponse resp;

@@ -86,6 +86,29 @@ pre {
   border-color: var(--blue);
 }
 
+.view-tabs {
+  width: min(1480px, calc(100vw - 32px));
+  margin: 14px auto 0;
+  display: flex;
+  gap: 8px;
+}
+
+.tab-btn {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.tab-btn.active {
+  background: #172234;
+  border-color: var(--blue);
+  color: var(--text);
+}
+
 .connection-pill {
   display: flex;
   align-items: center;
@@ -114,6 +137,18 @@ pre {
   background: var(--red);
 }
 
+.console-shell {
+  width: 100%;
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
 .audit-shell {
   width: min(1480px, calc(100vw - 32px));
   margin: 18px auto 28px;
@@ -139,7 +174,8 @@ pre {
 
 .workload-panel,
 .raw-panel,
-.evidence-panel {
+.evidence-panel,
+.trace-panel {
   grid-column: span 1;
 }
 
@@ -381,7 +417,8 @@ button:disabled {
   font-size: 12px;
 }
 
-#verify-raw {
+#verify-raw,
+#prod-raw {
   min-height: 360px;
   max-height: 560px;
   overflow: auto;
@@ -437,6 +474,11 @@ button:disabled {
   .audit-shell {
     width: calc(100vw - 20px);
     margin-top: 10px;
+  }
+
+  .view-tabs {
+    width: calc(100vw - 20px);
+    flex-direction: column;
   }
 
   .verification-matrix,
