@@ -94,6 +94,43 @@
           </div>
         </section>
 
+        <section class="audit-panel workload-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Background Device Stream</h1>
+              <p>Runs mixed production operations in the background: telemetry puts, config updates, tombstone deletes, and reads.</p>
+            </div>
+          </div>
+          <div class="control-row">
+            <label>
+              Operations
+              <select id="stream-ops">
+                <option value="1000">1K ops</option>
+                <option value="10000" selected>10K ops</option>
+                <option value="50000">50K ops</option>
+                <option value="100000">100K ops</option>
+              </select>
+            </label>
+            <label>
+              Devices
+              <select id="stream-devices">
+                <option value="25">25 devices</option>
+                <option value="100" selected>100 devices</option>
+                <option value="500">500 devices</option>
+                <option value="1000">1K devices</option>
+              </select>
+            </label>
+            <button class="primary-btn" id="stream-start">Start Stream</button>
+            <button class="secondary-btn" id="stream-stop">Stop</button>
+          </div>
+          <div class="workload-summary">
+            <div><span>Status</span><strong id="stream-status">Idle</strong></div>
+            <div><span>Progress</span><strong id="stream-progress">0%</strong></div>
+            <div><span>Mixed ops</span><strong id="stream-mix">-</strong></div>
+            <div><span>Workload file</span><strong id="stream-file">-</strong></div>
+          </div>
+        </section>
+
         <section class="audit-panel internals-panel">
           <div class="panel-title-row">
             <div>

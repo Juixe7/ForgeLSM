@@ -26,7 +26,12 @@
 #endif
 
 #include "kvstore.h"
+#include <atomic>
+#include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 // ── Parsed HTTP request ───────────────────────────────────────────
@@ -63,6 +68,9 @@ struct HttpResponse {
 //   POST /api/delete        → body: {"key":"k"}
 //   POST /api/bench         → body: {"type":"random_write","ops":500}
 //   POST /api/iot/bulk      → body: {"events":10000,"devices":16}
+//   POST /api/stream/start  → start background mixed production IoT stream
+//   POST /api/stream/stop   → stop background production stream
+//   GET  /api/stream/status → stream counters and recent trace
 //   POST /api/demo/run      → run small-threshold visual LSM demo
 //   POST /api/verify/<name> → isolated correctness verification run
 //
@@ -98,8 +106,13 @@ private:
     HttpResponse handle_delete(const HttpRequest& req);
     HttpResponse handle_bench(const HttpRequest& req);
     HttpResponse handle_iot_bulk(const HttpRequest& req);
+    HttpResponse handle_stream_start(const HttpRequest& req);
+    HttpResponse handle_stream_stop();
+    HttpResponse handle_stream_status();
     HttpResponse handle_demo_run(const HttpRequest& req);
     HttpResponse handle_verify(const HttpRequest& req, const std::string& test);
+    void run_stream_worker(uint64_t operations, uint64_t devices);
+    void append_stream_log(const std::string& line);
 
     // ── Minimal hand-rolled JSON helpers ─────────────────────────
     // These avoid any external JSON library dependency.
@@ -123,6 +136,23 @@ private:
     KVStore&  store_;
     int       port_;
     socket_t  server_fd_;
+
+    mutable std::mutex store_mutex_;
+    mutable std::mutex stream_mutex_;
+    std::thread stream_thread_;
+    std::atomic<bool> stream_running_{false};
+    std::atomic<bool> stream_stop_{false};
+    uint64_t stream_target_ = 0;
+    uint64_t stream_completed_ = 0;
+    uint64_t stream_puts_ = 0;
+    uint64_t stream_updates_ = 0;
+    uint64_t stream_deletes_ = 0;
+    uint64_t stream_gets_ = 0;
+    uint64_t stream_mismatches_ = 0;
+    uint64_t stream_devices_ = 0;
+    std::string stream_status_ = "idle";
+    std::string stream_workload_file_;
+    std::deque<std::string> stream_log_;
 };
 
 #endif // FLSM_HTTP_SERVER_H

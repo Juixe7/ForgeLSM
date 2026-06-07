@@ -11,6 +11,10 @@ const els = {
   prodDevices: document.getElementById('prod-devices'),
   prodRaw: document.getElementById('prod-raw'),
   prodTrace: document.getElementById('prod-trace'),
+  streamStart: document.getElementById('stream-start'),
+  streamStop: document.getElementById('stream-stop'),
+  streamOps: document.getElementById('stream-ops'),
+  streamDevices: document.getElementById('stream-devices'),
   demoRun: document.getElementById('demo-run'),
   demoEvents: document.getElementById('demo-events'),
   demoRaw: document.getElementById('demo-raw'),
@@ -162,6 +166,66 @@ function renderTrace(trace) {
         </div>
       `).join('')
     : '<div class="empty-state">No trace entries returned.</div>';
+}
+
+function renderStreamStatus(status) {
+  setText('stream-status', String(status.status || 'idle').toUpperCase());
+  byId('stream-status').className = status.running ? 'pending' : (status.status === 'completed' ? 'pass' : '');
+  setText('stream-progress', `${Number(status.progress_pct || 0).toFixed(1)}%`);
+  setText(
+    'stream-mix',
+    `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`
+  );
+  setText('stream-file', status.workload_file || '-');
+
+  const log = Array.isArray(status.log) ? status.log : [];
+  if (log.length) {
+    els.prodTrace.innerHTML = log.map((line) => `
+      <div class="step-row pass">
+        <div class="step-status">live</div>
+        <div>
+          <div class="step-name">${escapeHtml(line.split('|')[0] || 'operation')}</div>
+          <div class="step-detail">${escapeHtml(line)}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+}
+
+async function refreshStreamStatus() {
+  try {
+    const status = await getJson('/api/stream/status');
+    renderStreamStatus(status);
+  } catch (_) {
+    // Main connection status already reports server availability.
+  }
+}
+
+async function startStream() {
+  els.streamStart.disabled = true;
+  try {
+    await postJson('/api/stream/start', {
+      operations: parseInt(els.streamOps.value, 10),
+      devices: parseInt(els.streamDevices.value, 10),
+    });
+    await refreshStreamStatus();
+  } catch (err) {
+    renderTrace([{phase: 'stream-error', detail: err.message}]);
+  } finally {
+    els.streamStart.disabled = false;
+  }
+}
+
+async function stopStream() {
+  els.streamStop.disabled = true;
+  try {
+    await postJson('/api/stream/stop', {});
+    await refreshStreamStatus();
+  } catch (err) {
+    renderTrace([{phase: 'stream-error', detail: err.message}]);
+  } finally {
+    els.streamStop.disabled = false;
+  }
 }
 
 function setProductionBusy(isBusy) {
@@ -329,6 +393,8 @@ document.querySelectorAll('.tab-btn').forEach((button) => {
 
 els.refreshState.addEventListener('click', () => refreshState(true));
 els.prodRun.addEventListener('click', runProductionWorkload);
+els.streamStart.addEventListener('click', startStream);
+els.streamStop.addEventListener('click', stopStream);
 els.demoRun.addEventListener('click', runDemo);
 els.verifyRun.addEventListener('click', () => runVerification('full'));
 els.matrix.addEventListener('click', (event) => {
@@ -338,4 +404,8 @@ els.matrix.addEventListener('click', (event) => {
 });
 
 refreshState();
-setInterval(() => refreshState(false), POLL_INTERVAL_MS);
+refreshStreamStatus();
+setInterval(() => {
+  refreshState(false);
+  refreshStreamStatus();
+}, POLL_INTERVAL_MS);

@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────
@@ -82,6 +83,8 @@ HttpServer::HttpServer(KVStore& store, int port)
 }
 
 HttpServer::~HttpServer() {
+    stream_stop_ = true;
+    if (stream_thread_.joinable()) stream_thread_.join();
     if (server_fd_ != INVALID_SOCK) {
         close_sock(server_fd_);
         server_fd_ = INVALID_SOCK;
@@ -282,6 +285,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/lsm-state") return handle_lsm_state();
         if (req.path == "/api/debug/state") return handle_debug_state();
         if (req.path == "/api/debug/files") return handle_debug_files();
+        if (req.path == "/api/stream/status") return handle_stream_status();
     }
     if (req.method == "POST") {
         if (req.path == "/api/put")    return handle_put(req);
@@ -289,6 +293,8 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/delete") return handle_delete(req);
         if (req.path == "/api/bench")  return handle_bench(req);
         if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
+        if (req.path == "/api/stream/start") return handle_stream_start(req);
+        if (req.path == "/api/stream/stop") return handle_stream_stop();
         if (req.path == "/api/demo/run") return handle_demo_run(req);
         if (req.path == "/api/verify/basic") return handle_verify(req, "basic");
         if (req.path == "/api/verify/overwrite") return handle_verify(req, "overwrite");
@@ -334,6 +340,7 @@ HttpResponse HttpServer::handle_static(const std::string& rel_path) {
 // GET /api/metrics  — raw + derived engine metrics
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_metrics() {
+    std::lock_guard<std::mutex> guard(store_mutex_);
     const auto& m = store_.metrics();
 
     double write_amp = (m.user_bytes_written > 0)
@@ -374,6 +381,7 @@ HttpResponse HttpServer::handle_metrics() {
 // GET /api/lsm-state  — LSM tree dimensions and health
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_lsm_state() {
+    std::lock_guard<std::mutex> guard(store_mutex_);
     size_t mem_entries  = store_.memtable_entries();
     size_t mem_bytes    = store_.active_byte_size();
     size_t flush_thresh = store_.flush_threshold_bytes();
@@ -417,6 +425,7 @@ HttpResponse HttpServer::handle_lsm_state() {
 // Plain evidence snapshot used by the verification console.
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_debug_state() {
+    std::lock_guard<std::mutex> guard(store_mutex_);
     const auto& m = store_.metrics();
 
     uint64_t wal_files = 0;
@@ -600,6 +609,7 @@ HttpResponse HttpServer::handle_put(const HttpRequest& req) {
         return resp;
     }
     try {
+        std::lock_guard<std::mutex> guard(store_mutex_);
         store_.put(key, value);
         resp.body = R"({"ok":true})";
     } catch (const std::exception& e) {
@@ -621,7 +631,12 @@ HttpResponse HttpServer::handle_get(const HttpRequest& req) {
         return resp;
     }
     std::string value;
-    if (store_.get(key, value)) {
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        found = store_.get(key, value);
+    }
+    if (found) {
         resp.body = std::string(R"({"found":true,"value":")") + json_escape(value) + "\"}";
     } else {
         resp.body = R"({"found":false})";
@@ -641,6 +656,7 @@ HttpResponse HttpServer::handle_delete(const HttpRequest& req) {
         return resp;
     }
     try {
+        std::lock_guard<std::mutex> guard(store_mutex_);
         store_.delete_key(key);
         resp.body = R"({"ok":true})";
     } catch (const std::exception& e) {
@@ -670,6 +686,7 @@ HttpResponse HttpServer::handle_bench(const HttpRequest& req) {
     if (ops < 50)   ops = 50;
     if (ops > 2000) ops = 2000;
 
+    std::lock_guard<std::mutex> guard(store_mutex_);
     store_.metrics().reset();
     auto t0 = std::chrono::high_resolution_clock::now();
 
@@ -726,6 +743,13 @@ HttpResponse HttpServer::handle_bench(const HttpRequest& req) {
 // Writes deterministic sensor events into the live production store.
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
+    if (stream_running_) {
+        HttpResponse busy;
+        busy.status = 400;
+        busy.body = R"({"error":"background stream is running; stop it before bulk writes"})";
+        return busy;
+    }
+    std::lock_guard<std::mutex> guard(store_mutex_);
     long long requested_events = json_get_int(req.body, "events", 1000);
     long long requested_devices = json_get_int(req.body, "devices", 16);
     if (requested_events < 1) requested_events = 1;
@@ -834,6 +858,198 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
       << ", L1 changed " << l1_before << " -> " << l1_after << "\"},";
     j << "{\"phase\":\"sample-read\",\"detail\":\"Checked " << sample_checked
       << " representative keys with " << sample_mismatches << " mismatches\"}";
+    j << "]\n";
+    j << "}";
+
+    HttpResponse resp;
+    resp.body = j.str();
+    return resp;
+}
+
+void HttpServer::append_stream_log(const std::string& line) {
+    std::lock_guard<std::mutex> guard(stream_mutex_);
+    stream_log_.push_back(line);
+    while (stream_log_.size() > 120) stream_log_.pop_front();
+}
+
+void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
+    std::filesystem::create_directories("iot_workloads");
+    const std::string workload_path = "iot_workloads/latest_production_stream.jsonl";
+    std::ofstream workload_file(workload_path, std::ios::trunc);
+
+    {
+        std::lock_guard<std::mutex> guard(stream_mutex_);
+        stream_workload_file_ = workload_path;
+        stream_status_ = "running";
+    }
+
+    append_stream_log("stream:start | devices=" + std::to_string(devices) +
+                      " operations=" + std::to_string(operations));
+
+    for (uint64_t i = 0; i < operations && !stream_stop_; ++i) {
+        uint64_t device = i % devices;
+        uint64_t op_bucket = i % 100;
+        std::string op;
+        std::string key;
+        std::string value;
+        bool mismatch = false;
+
+        if (op_bucket < 80) {
+            op = "put";
+            key = "iot:device_" + std::to_string(device) + ":telemetry:" + std::to_string(i);
+            std::ostringstream payload;
+            payload << "{\"device_id\":\"device_" << device
+                    << "\",\"sequence\":" << i
+                    << ",\"op\":\"telemetry\","
+                    << "\"temperature_c\":" << std::fixed << std::setprecision(2)
+                    << (20.0 + static_cast<double>((i * 31) % 1800) / 100.0)
+                    << ",\"vibration_g\":" << std::fixed << std::setprecision(3)
+                    << (0.10 + static_cast<double>((i * 13) % 700) / 1000.0)
+                    << "}";
+            value = payload.str();
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                store_.put(key, value);
+            }
+            {
+                std::lock_guard<std::mutex> guard(stream_mutex_);
+                stream_puts_++;
+            }
+        } else if (op_bucket < 90) {
+            op = "update";
+            key = "iot:device_" + std::to_string(device) + ":config";
+            value = "{\"device_id\":\"device_" + std::to_string(device) +
+                    "\",\"op\":\"config_update\",\"sampling_ms\":" +
+                    std::to_string(250 + (i % 10) * 50) + "}";
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                store_.put(key, value);
+            }
+            {
+                std::lock_guard<std::mutex> guard(stream_mutex_);
+                stream_updates_++;
+            }
+        } else if (op_bucket < 95) {
+            op = "delete";
+            uint64_t victim = (i > devices) ? (i - devices) : i;
+            key = "iot:device_" + std::to_string(victim % devices) + ":telemetry:" + std::to_string(victim);
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                store_.delete_key(key);
+            }
+            {
+                std::lock_guard<std::mutex> guard(stream_mutex_);
+                stream_deletes_++;
+            }
+        } else {
+            op = "get";
+            key = "iot:device_" + std::to_string(device) + ":config";
+            std::string actual;
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                store_.get(key, actual);
+            }
+            {
+                std::lock_guard<std::mutex> guard(stream_mutex_);
+                stream_gets_++;
+            }
+        }
+
+        if (workload_file) {
+            workload_file << "{\"op\":\"" << op << "\",\"key\":\"" << json_escape(key) << "\"";
+            if (!value.empty()) workload_file << ",\"value\":\"" << json_escape(value) << "\"";
+            workload_file << "}\n";
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(stream_mutex_);
+            stream_completed_++;
+            if (mismatch) stream_mismatches_++;
+        }
+
+        append_stream_log(op + " | key=" + key);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(stream_mutex_);
+        stream_status_ = stream_stop_ ? "stopped" : "completed";
+    }
+    append_stream_log("stream:" + std::string(stream_stop_ ? "stopped" : "completed"));
+    stream_running_ = false;
+}
+
+HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
+    if (stream_running_) {
+        HttpResponse busy;
+        busy.status = 400;
+        busy.body = R"({"error":"stream already running"})";
+        return busy;
+    }
+
+    uint64_t operations = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "operations", 10000), 100LL, 500000LL));
+    uint64_t devices = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "devices", 100), 1LL, 5000LL));
+
+    if (stream_thread_.joinable()) stream_thread_.join();
+
+    {
+        std::lock_guard<std::mutex> guard(stream_mutex_);
+        stream_target_ = operations;
+        stream_completed_ = 0;
+        stream_puts_ = 0;
+        stream_updates_ = 0;
+        stream_deletes_ = 0;
+        stream_gets_ = 0;
+        stream_mismatches_ = 0;
+        stream_devices_ = devices;
+        stream_status_ = "starting";
+        stream_workload_file_.clear();
+        stream_log_.clear();
+    }
+
+    stream_stop_ = false;
+    stream_running_ = true;
+    stream_thread_ = std::thread(&HttpServer::run_stream_worker, this, operations, devices);
+
+    HttpResponse resp;
+    resp.body = R"({"ok":true,"status":"starting"})";
+    return resp;
+}
+
+HttpResponse HttpServer::handle_stream_stop() {
+    stream_stop_ = true;
+    if (stream_thread_.joinable()) stream_thread_.join();
+    stream_running_ = false;
+    HttpResponse resp;
+    resp.body = R"({"ok":true})";
+    return resp;
+}
+
+HttpResponse HttpServer::handle_stream_status() {
+    std::lock_guard<std::mutex> guard(stream_mutex_);
+    double progress = stream_target_ > 0
+        ? static_cast<double>(stream_completed_) / static_cast<double>(stream_target_) * 100.0
+        : 0.0;
+
+    std::ostringstream j;
+    j << "{\n";
+    j << json_bool("running", stream_running_);
+    j << json_str("status", stream_status_);
+    j << json_num("target_operations", stream_target_);
+    j << json_num("completed_operations", stream_completed_);
+    j << json_num("devices", stream_devices_);
+    j << json_num("puts", stream_puts_);
+    j << json_num("updates", stream_updates_);
+    j << json_num("deletes", stream_deletes_);
+    j << json_num("gets", stream_gets_);
+    j << json_num("mismatches", stream_mismatches_);
+    j << json_str("workload_file", stream_workload_file_);
+    j << json_dbl("progress_pct", progress);
+    j << "  \"log\": [";
+    for (size_t i = 0; i < stream_log_.size(); ++i) {
+        if (i) j << ",";
+        j << "\"" << json_escape(stream_log_[i]) << "\"";
+    }
     j << "]\n";
     j << "}";
 
