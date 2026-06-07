@@ -16,7 +16,9 @@
   #define wal_read(fd, buf, len)       _read(fd, buf, static_cast<unsigned int>(len))
   #define wal_close(fd)                _close(fd)
   #define wal_fsync(fd)                _commit(fd)
+  #define wal_lseek(fd, off, whence)   _lseeki64(fd, off, whence)
   static constexpr int WAL_APPEND_FLAGS = _O_WRONLY | _O_APPEND | _O_CREAT | _O_BINARY;
+  static constexpr int WAL_RDWR_FLAGS   = _O_RDWR | _O_BINARY;
   static constexpr int WAL_READ_FLAGS   = _O_RDONLY | _O_BINARY;
   static constexpr int WAL_MODE         = _S_IREAD | _S_IWRITE;
   // Windows does not use EINTR; define it away for uniform code.
@@ -31,7 +33,9 @@
   #define wal_read(fd, buf, len)       read(fd, buf, len)
   #define wal_close(fd)                close(fd)
   #define wal_fsync(fd)                fdatasync(fd)
+  #define wal_lseek(fd, off, whence)   lseek(fd, off, whence)
   static constexpr int WAL_APPEND_FLAGS = O_WRONLY | O_APPEND | O_CREAT;
+  static constexpr int WAL_RDWR_FLAGS   = O_RDWR;
   static constexpr int WAL_READ_FLAGS   = O_RDONLY;
   static constexpr int WAL_MODE         = 0644;
 #endif
@@ -68,6 +72,24 @@ static bool read_exact(int fd, void* buf, size_t len) {
         remaining -= static_cast<size_t>(n);
     }
     return true;
+}
+
+static bool truncate_file_to(const std::string& path, uint64_t offset) {
+#ifdef _WIN32
+    int fd = wal_open(path.c_str(), WAL_RDWR_FLAGS, WAL_MODE);
+    if (fd < 0) return false;
+    int rc = _chsize_s(fd, offset);
+    if (rc == 0) rc = wal_fsync(fd);
+    wal_close(fd);
+    return rc == 0;
+#else
+    if (::truncate(path.c_str(), static_cast<off_t>(offset)) != 0) return false;
+    int fd = wal_open(path.c_str(), WAL_RDWR_FLAGS, WAL_MODE);
+    if (fd < 0) return false;
+    int rc = wal_fsync(fd);
+    wal_close(fd);
+    return rc == 0;
+#endif
 }
 
 // ── WAL constructor ────────────────────────────────────────────
@@ -146,48 +168,83 @@ bool WAL::sync() {
 ReplayResult WAL::replay() const {
     ReplayResult result;
     result.tainted = false;
+    result.safe_offset = 0;
+    result.bad_offset = 0;
 
     int rfd = wal_open(path_.c_str(), WAL_READ_FLAGS, 0);
     if (rfd < 0) return result;   // file does not exist yet
+
+    auto file_size_raw = wal_lseek(rfd, 0, SEEK_END);
+    uint64_t file_size = file_size_raw > 0 ? static_cast<uint64_t>(file_size_raw) : 0;
+    wal_lseek(rfd, 0, SEEK_SET);
 
     bool hit_eof_cleanly = false;
 
     while (true) {
         uint32_t key_size = 0, value_size = 0, stored_checksum = 0;
+        auto record_start_raw = wal_lseek(rfd, 0, SEEK_CUR);
+        uint64_t record_start = record_start_raw >= 0 ? static_cast<uint64_t>(record_start_raw) : result.safe_offset;
 
         // Read 12-byte header. A clean EOF here means we've consumed
         // all records — NOT corruption.
         if (!read_exact(rfd, &key_size, sizeof(uint32_t))) {
-            hit_eof_cleanly = true;
+            hit_eof_cleanly = (record_start == file_size);
+            if (!hit_eof_cleanly) result.bad_offset = record_start;
             break;
         }
-        if (!read_exact(rfd, &value_size,      sizeof(uint32_t))) break;
-        if (!read_exact(rfd, &stored_checksum, sizeof(uint32_t))) break;
+        if (!read_exact(rfd, &value_size, sizeof(uint32_t))) {
+            result.bad_offset = record_start;
+            break;
+        }
+        if (!read_exact(rfd, &stored_checksum, sizeof(uint32_t))) {
+            result.bad_offset = record_start;
+            break;
+        }
+
+        // Size sanity check before allocation.
+        if (key_size > MAX_FIELD_SIZE ||
+            (value_size != 0xFFFFFFFF && value_size > MAX_FIELD_SIZE)) {
+            result.bad_offset = record_start;
+            break;
+        }
 
         // Read key.
         std::string key(key_size, '\0');
-        if (key_size > 0 && !read_exact(rfd, key.data(), key_size)) break;
+        if (key_size > 0 && !read_exact(rfd, key.data(), key_size)) {
+            result.bad_offset = record_start;
+            break;
+        }
 
         // Check if tombstone
         if (value_size == 0xFFFFFFFF) {
             uint32_t expected = record_checksum(key_size, value_size, key, "");
-            if (stored_checksum != expected) break;
+            if (stored_checksum != expected) {
+                result.bad_offset = record_start;
+                break;
+            }
             result.entries.push_back({std::move(key), "", true});
+            auto next_raw = wal_lseek(rfd, 0, SEEK_CUR);
+            if (next_raw >= 0) result.safe_offset = static_cast<uint64_t>(next_raw);
             continue;
         }
 
-        // Size sanity check — corruption guard.
-        if (key_size > MAX_FIELD_SIZE || value_size > MAX_FIELD_SIZE) break;
-
         // Read value.
         std::string value(value_size, '\0');
-        if (value_size > 0 && !read_exact(rfd, value.data(), value_size)) break;
+        if (value_size > 0 && !read_exact(rfd, value.data(), value_size)) {
+            result.bad_offset = record_start;
+            break;
+        }
 
         // Verify checksum.
         uint32_t expected = record_checksum(key_size, value_size, key, value);
-        if (stored_checksum != expected) break;
+        if (stored_checksum != expected) {
+            result.bad_offset = record_start;
+            break;
+        }
 
         result.entries.push_back({std::move(key), std::move(value), false});
+        auto next_raw = wal_lseek(rfd, 0, SEEK_CUR);
+        if (next_raw >= 0) result.safe_offset = static_cast<uint64_t>(next_raw);
         continue;
     }
 
@@ -197,8 +254,13 @@ ReplayResult WAL::replay() const {
     if (!hit_eof_cleanly) {
         result.tainted = true;
         std::cerr << "[WAL] WARNING: replay stopped at corrupt/incomplete record "
-                  << "(recovered " << result.entries.size()
-                  << " valid entries, WAL marked tainted)\n";
+                  << "at byte " << result.bad_offset
+                  << " (recovered " << result.entries.size()
+                  << " valid entries, truncating to byte " << result.safe_offset << ")\n";
+        if (!truncate_file_to(path_, result.safe_offset)) {
+            std::cerr << "[WAL] WARNING: failed to truncate corrupt WAL tail for "
+                      << path_ << "\n";
+        }
     }
 
     // Cache the tainted state on the WAL object.

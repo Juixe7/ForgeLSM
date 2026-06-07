@@ -152,23 +152,6 @@
       <pre id="verify-raw">{}</pre>
     </section>
 
-    <section class="audit-panel limitations-panel">
-      <div class="panel-title-row">
-        <div>
-          <h1>Known Limitations</h1>
-          <p>Academic honesty: these are not hidden behind green metrics.</p>
-        </div>
-      </div>
-      <table class="audit-table">
-        <tbody>
-          <tr><th>VLog GC crash safety</th><td><span class="status-chip partial">Partial</span> Normal GC is verified; sudden crash during GC still needs redesign.</td></tr>
-          <tr><th>WAL corrupt tail</th><td><span class="status-chip partial">Partial</span> Corruption is detected; active truncation strategy is still a Track 1 decision.</td></tr>
-          <tr><th>SSTable fsync/rename hardening</th><td><span class="status-chip pending">Pending</span> Safe temp-file write path is planned for Track 1.</td></tr>
-          <tr><th>Manifest directory fsync</th><td><span class="status-chip pending">Pending</span> Commit logic works for normal cases but needs stronger crash-boundary hardening.</td></tr>
-          <tr><th>Production readiness</th><td><span class="status-chip partial">Not claimed</span> This is a local-first verified engine project, not a production database service.</td></tr>
-        </tbody>
-      </table>
-    </section>
   </main>
 
   <script src="/app.js"></script>

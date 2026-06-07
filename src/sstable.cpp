@@ -2,11 +2,68 @@
 #include "crc32.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <vector>
+
+#ifdef _WIN32
+  #include <io.h>
+  #include <fcntl.h>
+  #include <sys/stat.h>
+  #define sst_open(path, flags, mode)  _open(path, flags, mode)
+  #define sst_write(fd, buf, len)      _write(fd, buf, static_cast<unsigned int>(len))
+  #define sst_close(fd)                _close(fd)
+  #define sst_fsync(fd)                _commit(fd)
+  static constexpr int SST_WRITE_FLAGS = _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY;
+  static constexpr int SST_MODE        = _S_IREAD | _S_IWRITE;
+  #ifndef EINTR
+    #define EINTR 0
+  #endif
+#else
+  #include <unistd.h>
+  #include <fcntl.h>
+  #define sst_open(path, flags, mode)  open(path, flags, mode)
+  #define sst_write(fd, buf, len)      write(fd, buf, len)
+  #define sst_close(fd)                close(fd)
+  #define sst_fsync(fd)                fdatasync(fd)
+  static constexpr int SST_WRITE_FLAGS = O_WRONLY | O_CREAT | O_TRUNC;
+  static constexpr int SST_MODE        = 0644;
+#endif
+
+static bool write_all_sst(int fd, const void* buf, size_t len) {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t remaining = len;
+    while (remaining > 0) {
+        auto written = sst_write(fd, p, remaining);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (written == 0) return false;
+        p += written;
+        remaining -= static_cast<size_t>(written);
+    }
+    return true;
+}
+
+static bool fsync_parent_dir(const std::string& path) {
+#ifdef _WIN32
+    (void)path;
+    return true;
+#else
+    std::filesystem::path parent = std::filesystem::path(path).parent_path();
+    if (parent.empty()) parent = ".";
+    int fd = open(parent.string().c_str(), O_RDONLY);
+    if (fd < 0) return false;
+    int rc = fsync(fd);
+    close(fd);
+    return rc == 0;
+#endif
+}
 
 // ── SSTableWriter ──────────────────────────────────────────────
 
@@ -49,20 +106,39 @@ bool SSTableWriter::write(const std::string& path,
     uint32_t entry_count = static_cast<uint32_t>(entries.size());
     uint32_t checksum    = compute_crc32(data.data(), data.size());
 
-    // Write data section + bloom section + footer to file.
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) return false;
+    const std::string temp_path = path + ".tmp";
+    std::error_code ec;
+    std::filesystem::remove(temp_path, ec);
 
-    out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-    out.write(reinterpret_cast<const char*>(&entry_count),  sizeof(uint32_t));
-    out.write(reinterpret_cast<const char*>(&bloom_offset), sizeof(uint32_t));
-    out.write(reinterpret_cast<const char*>(&bloom_size_total),sizeof(uint32_t));
-    out.write(reinterpret_cast<const char*>(&checksum),     sizeof(uint32_t));
-    out.flush();
+    int fd = sst_open(temp_path.c_str(), SST_WRITE_FLAGS, SST_MODE);
+    if (fd < 0) return false;
 
-    if (!out.good()) return false;
-    out.close();
-    return true;
+    bool ok = write_all_sst(fd, data.data(), data.size()) &&
+              write_all_sst(fd, &entry_count, sizeof(uint32_t)) &&
+              write_all_sst(fd, &bloom_offset, sizeof(uint32_t)) &&
+              write_all_sst(fd, &bloom_size_total, sizeof(uint32_t)) &&
+              write_all_sst(fd, &checksum, sizeof(uint32_t));
+
+    if (ok && sst_fsync(fd) != 0) ok = false;
+    if (sst_close(fd) != 0) ok = false;
+
+    if (!ok) {
+        std::filesystem::remove(temp_path, ec);
+        return false;
+    }
+
+    std::filesystem::rename(temp_path, path, ec);
+    if (ec) {
+        std::filesystem::remove(path, ec);
+        ec.clear();
+        std::filesystem::rename(temp_path, path, ec);
+    }
+    if (ec) {
+        std::filesystem::remove(temp_path, ec);
+        return false;
+    }
+
+    return fsync_parent_dir(path);
 }
 
 // ── SSTableReader ──────────────────────────────────────────────

@@ -16,6 +16,8 @@ struct WALEntry {
 struct ReplayResult {
     std::vector<WALEntry> entries;     // valid, checksum-verified records
     bool                  tainted;     // true if replay stopped due to corruption
+    uint64_t              safe_offset; // byte offset immediately after last valid record
+    uint64_t              bad_offset;  // byte offset where corrupt/incomplete data began
 };
 
 // Write-Ahead Log — append-only, CRC32-validated, crash-safe.
@@ -60,7 +62,8 @@ public:
 
     // Replay the WAL from byte 0. Returns valid entries + tainted flag.
     // Stops at the first invalid / incomplete / corrupt record.
-    // This is a read-only operation — the WAL file is not modified.
+    // If corruption is found, truncates the file back to the last safe record
+    // boundary so later boots start from a clean WAL.
     ReplayResult replay() const;
 
     // True if the last replay encountered corruption before EOF.

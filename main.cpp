@@ -115,6 +115,7 @@ static void test_restart_recovery(const std::string& dir) {
 static void test_corrupt_tail(const std::string& dir) {
     std::cout << "\n=== Test 3: Corrupted WAL Tail ===\n";
     std::string wal_file = find_wal_file(dir);
+    auto safe_size = std::filesystem::file_size(wal_file);
     uint32_t fake = 9999;
     append_raw_bytes(wal_file, &fake, sizeof(uint32_t));
     const char junk[] = "CORRUPT";
@@ -126,6 +127,8 @@ static void test_corrupt_tail(const std::string& dir) {
     std::string v;
     store.get("name", v);   expect_eq(v, "wisckey", "name survives corruption");
     store.get("engine", v); expect_eq(v, "lsm",     "engine survives corruption");
+    expect_true(std::filesystem::file_size(wal_file) == safe_size,
+                "corrupt WAL tail truncated to last safe record boundary");
 }
 
 static void test_checksum_mismatch(const std::string& dir) {
@@ -144,6 +147,8 @@ static void test_checksum_mismatch(const std::string& dir) {
 
     KVStore store(dir);
     expect_true(store.memtable_size() == 0, "zero entries from bad-checksum WAL");
+    expect_true(std::filesystem::file_size(wal_file) == 0,
+                "bad-checksum WAL truncated to empty safe boundary");
 }
 
 static void test_overwrite_semantics(const std::string& dir) {
