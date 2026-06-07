@@ -292,7 +292,7 @@ void gc_events(VerificationRun& run, KVStore& db, const std::string& dir, int co
 std::string run_verification(const VerificationOptions& options) {
     VerificationRun run;
     run.test = options.test.empty() ? "full" : options.test;
-    run.ops = std::clamp(options.ops, 100, 50000);
+    run.ops = std::clamp(options.ops, 100, 100000);
 
     const std::string verify_dir = "flsm_verify_lab";
 

@@ -3,369 +3,173 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ForgeLSM — Engine Introspector</title>
-  <meta name="description" content="Real-time observability dashboard for ForgeLSM — a WiscKey-style LSM storage engine built from scratch in C++20." />
+  <title>ForgeLSM Verification Console</title>
+  <meta name="description" content="Audit console for ForgeLSM, a local-first WiscKey-style LSM storage engine." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <!-- ── Header ─────────────────────────────────────────────── -->
-  <header class="site-header">
-    <div class="header-inner">
-      <div class="brand">
-        <div class="brand-icon">
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-            <rect x="1" y="1" width="20" height="20" rx="4" stroke="#00d4ff" stroke-width="1.5"/>
-            <rect x="5" y="5" width="5" height="5" fill="#00d4ff" opacity="0.8"/>
-            <rect x="12" y="5" width="5" height="5" fill="#7c3aed" opacity="0.8"/>
-            <rect x="5" y="12" width="5" height="5" fill="#7c3aed" opacity="0.6"/>
-            <rect x="12" y="12" width="5" height="5" fill="#00d4ff" opacity="0.4"/>
-          </svg>
-        </div>
-        <div class="brand-text">
-          <span class="brand-name">ForgeLSM</span>
-          <span class="brand-sub">Engine Introspector</span>
-        </div>
+  <header class="topbar">
+    <div>
+      <div class="brand-name">ForgeLSM</div>
+      <div class="brand-subtitle">Local Edge Event Store Verification Console</div>
+    </div>
+    <div class="topbar-right">
+      <div class="connection-pill" id="status-pill">
+        <span class="connection-dot"></span>
+        <span id="status-text">Connecting</span>
       </div>
-      <div class="header-meta">
-        <div class="status-pill" id="status-pill">
-          <span class="status-dot"></span>
-          <span id="status-text">Connecting...</span>
-        </div>
-        <div class="engine-tag">WiscKey · LSM · C++20</div>
-      </div>
+      <a href="https://github.com/Juixe7/ForgeLSM" target="_blank" rel="noopener">GitHub</a>
     </div>
   </header>
 
-  <!-- ── Main Grid ─────────────────────────────────────────── -->
-  <main class="dashboard">
-
-    <section class="verification-console">
-      <div class="verification-header">
+  <main class="audit-shell">
+    <section class="audit-panel system-panel">
+      <div class="panel-title-row">
         <div>
-          <h1>Edge Event Store Verification Console</h1>
-          <p>
-            Runs an isolated IoT sensor-event workload against ForgeLSM and compares every live key
-            with a simple reference model. Production data is not touched.
-          </p>
+          <h1>System State</h1>
+          <p>Live production store: <code>flsm_production</code></p>
         </div>
-        <div class="verification-actions">
-          <select id="verify-ops" class="verify-select" title="Number of deterministic IoT events to generate">
+        <button class="secondary-btn" id="refresh-state">Refresh</button>
+      </div>
+      <table class="audit-table">
+        <tbody>
+          <tr><th>Memtable entries</th><td id="state-mem-entries">-</td></tr>
+          <tr><th>Memtable bytes</th><td id="state-mem-bytes">-</td></tr>
+          <tr><th>Flush threshold</th><td id="state-flush-threshold">-</td></tr>
+          <tr><th>L0 SSTables</th><td id="state-l0">-</td></tr>
+          <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
+          <tr><th>WAL status</th><td id="state-wal">-</td></tr>
+          <tr><th>Write amplification</th><td id="state-write-amp">-</td></tr>
+          <tr><th>Read amplification</th><td id="state-read-amp">-</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="audit-panel workload-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Edge Event Workload</h1>
+          <p>Runs isolated deterministic IoT workloads and compares results with a reference model.</p>
+        </div>
+      </div>
+      <div class="control-row">
+        <label>
+          Event count
+          <select id="verify-ops">
             <option value="1000">1K events</option>
-            <option value="5000" selected>5K events</option>
-            <option value="10000">10K events</option>
+            <option value="10000" selected>10K events</option>
             <option value="25000">25K events</option>
+            <option value="50000">50K events</option>
+            <option value="100000">100K events</option>
           </select>
-          <button id="verify-run" class="verify-run-btn">Run Full Verification</button>
+        </label>
+        <button class="primary-btn" id="verify-run">Run Full Verification</button>
+      </div>
+      <div class="workload-summary">
+        <div><span>Status</span><strong id="verify-status">Not run</strong></div>
+        <div><span>Recovered keys</span><strong id="verify-recovered">-</strong></div>
+        <div><span>Mismatches</span><strong id="verify-mismatches">-</strong></div>
+        <div><span>Bloom skips</span><strong id="verify-bloom">-</strong></div>
+      </div>
+    </section>
+
+    <section class="audit-panel matrix-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Verification Matrix</h1>
+          <p>Run feature-specific proofs. Each test uses <code>flsm_verify_lab</code> and leaves production data untouched.</p>
         </div>
       </div>
-
-      <div class="verification-grid">
-        <div class="verification-card">
-          <div class="verification-label">Overall Status</div>
-          <div class="verification-value" id="verify-status">Not run</div>
-        </div>
-        <div class="verification-card">
-          <div class="verification-label">Live Keys Verified After Recovery</div>
-          <div class="verification-value" id="verify-recovered">—</div>
-        </div>
-        <div class="verification-card">
-          <div class="verification-label">Mismatches</div>
-          <div class="verification-value" id="verify-mismatches">—</div>
-        </div>
-        <div class="verification-card">
-          <div class="verification-label">Bloom Skips On Missing Events</div>
-          <div class="verification-value" id="verify-bloom">—</div>
-        </div>
-      </div>
-
       <div class="verification-matrix" id="verification-matrix">
-        <button class="verify-test-btn" data-test="basic"><span>Basic Put/Get</span><strong id="matrix-basic">Not run</strong></button>
-        <button class="verify-test-btn" data-test="overwrite"><span>Overwrite</span><strong id="matrix-overwrite">Not run</strong></button>
-        <button class="verify-test-btn" data-test="delete"><span>Delete/Tombstone</span><strong id="matrix-delete">Not run</strong></button>
-        <button class="verify-test-btn" data-test="flush"><span>Flush/SSTable</span><strong id="matrix-flush">Not run</strong></button>
-        <button class="verify-test-btn" data-test="bloom"><span>Bloom Filter</span><strong id="matrix-bloom">Not run</strong></button>
-        <button class="verify-test-btn" data-test="compaction"><span>Compaction</span><strong id="matrix-compaction">Not run</strong></button>
-        <button class="verify-test-btn" data-test="recovery"><span>Recovery</span><strong id="matrix-recovery">Not run</strong></button>
-        <button class="verify-test-btn" data-test="gc"><span>VLog GC</span><strong id="matrix-gc">Partial</strong></button>
-      </div>
-
-      <div class="verification-evidence">
-        <div class="evidence-column">
-          <h2>Verification Steps</h2>
-          <div id="verify-steps" class="evidence-list">
-            <div class="evidence-empty">Run verification to see step-by-step proof.</div>
-          </div>
-        </div>
-        <div class="evidence-column">
-          <h2>Internal State Evidence</h2>
-          <table class="evidence-table">
-            <tbody>
-              <tr><th>L0 flush transition</th><td id="ev-flush">—</td></tr>
-              <tr><th>Compaction transition</th><td id="ev-compaction">—</td></tr>
-              <tr><th>Deleted keys checked</th><td id="ev-deletes">—</td></tr>
-              <tr><th>Model live keys</th><td id="ev-model">—</td></tr>
-            </tbody>
-          </table>
-          <details class="raw-json-box">
-            <summary>Raw verification JSON</summary>
-            <pre id="verify-raw">{}</pre>
-          </details>
-        </div>
+        <button class="matrix-btn" data-test="basic"><span>Basic Put/Get</span><strong id="matrix-basic">Not run</strong></button>
+        <button class="matrix-btn" data-test="overwrite"><span>Overwrite</span><strong id="matrix-overwrite">Not run</strong></button>
+        <button class="matrix-btn" data-test="delete"><span>Delete/Tombstone</span><strong id="matrix-delete">Not run</strong></button>
+        <button class="matrix-btn" data-test="flush"><span>Flush/SSTable</span><strong id="matrix-flush">Not run</strong></button>
+        <button class="matrix-btn" data-test="bloom"><span>Bloom Filter</span><strong id="matrix-bloom">Not run</strong></button>
+        <button class="matrix-btn" data-test="compaction"><span>Compaction</span><strong id="matrix-compaction">Not run</strong></button>
+        <button class="matrix-btn" data-test="recovery"><span>Recovery</span><strong id="matrix-recovery">Not run</strong></button>
+        <button class="matrix-btn partial" data-test="gc"><span>VLog GC</span><strong id="matrix-gc">Partial</strong></button>
       </div>
     </section>
 
-    <!-- Row 1: KPI strip -->
-    <section class="kpi-strip">
-      <div class="kpi-card" id="kpi-writes">
-        <div class="kpi-label">User Bytes Written</div>
-        <div class="kpi-value" id="kpi-user-bytes">—</div>
-        <div class="kpi-sub">lifetime</div>
-      </div>
-      <div class="kpi-card" id="kpi-gets">
-        <div class="kpi-label">GET Operations</div>
-        <div class="kpi-value" id="kpi-get-calls">—</div>
-        <div class="kpi-sub">total get() calls</div>
-      </div>
-      <div class="kpi-card kpi-accent-cyan">
-        <div class="kpi-label">Bloom Effectiveness</div>
-        <div class="kpi-value" id="kpi-bloom">—</div>
-        <div class="kpi-sub">SST scans skipped</div>
-      </div>
-      <div class="kpi-card kpi-accent-purple">
-        <div class="kpi-label">VLog Reads</div>
-        <div class="kpi-value" id="kpi-vlog">—</div>
-        <div class="kpi-sub">value fetches from disk</div>
-      </div>
-    </section>
-
-    <!-- Row 2: Amp gauges + LSM tree -->
-    <section class="mid-row">
-
-      <!-- Write Amplification Gauge -->
-      <div class="panel gauge-panel">
-        <div class="panel-header">
-          <span class="panel-title">Write Amplification</span>
-          <span class="panel-badge badge-cyan">WiscKey advantage</span>
-        </div>
-        <div class="gauge-wrap">
-          <canvas id="write-amp-canvas" width="200" height="130"></canvas>
-          <div class="gauge-center">
-            <div class="gauge-value" id="write-amp-val">—</div>
-            <div class="gauge-unit">× amplification</div>
-          </div>
-        </div>
-        <div class="gauge-note">
-          Bounded at ~2.0× (WAL + VLog ingestion). Compaction shuffles only 20-byte
-          key pointers, not values.
+    <section class="audit-panel internals-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Storage Internals</h1>
+          <p>Actual files currently visible to the production engine.</p>
         </div>
       </div>
-
-      <!-- Read Amplification Gauge -->
-      <div class="panel gauge-panel">
-        <div class="panel-header">
-          <span class="panel-title">Read Amplification</span>
-          <span class="panel-badge badge-purple">Bloom-filtered</span>
-        </div>
-        <div class="gauge-wrap">
-          <canvas id="read-amp-canvas" width="200" height="130"></canvas>
-          <div class="gauge-center">
-            <div class="gauge-value" id="read-amp-val">—</div>
-            <div class="gauge-unit">× amplification</div>
-          </div>
-        </div>
-        <div class="gauge-note">
-          1.0× = 1 SST search + 1 VLog read per get(). Bloom filters
-          eliminate false binary search overhead.
-        </div>
-      </div>
-
-      <!-- LSM Tree Visualization -->
-      <div class="panel lsm-panel">
-        <div class="panel-header">
-          <span class="panel-title">LSM Tree State</span>
-          <span class="panel-badge badge-neutral" id="lsm-health-badge">—</span>
-        </div>
-        <div class="lsm-diagram" id="lsm-diagram">
-          <!-- Populated by app.js -->
-          <div class="lsm-layer" id="lsm-memtable">
-            <div class="lsm-layer-label">Memtable</div>
-            <div class="lsm-bar-wrap">
-              <div class="lsm-bar lsm-bar-mem" id="memtable-fill-bar" style="width:0%"></div>
-            </div>
-            <div class="lsm-layer-meta" id="memtable-meta">—</div>
-          </div>
-          <div class="lsm-arrow">↓ flush when full</div>
-          <div class="lsm-layer" id="lsm-l0">
-            <div class="lsm-layer-label">L0 SSTables</div>
-            <div class="lsm-files" id="lsm-l0-files">—</div>
-            <div class="lsm-layer-meta" id="l0-meta">—</div>
-          </div>
-          <div class="lsm-arrow">↓ compact when L0 ≥ 15</div>
-          <div class="lsm-layer" id="lsm-l1">
-            <div class="lsm-layer-label">L1 SSTables</div>
-            <div class="lsm-files" id="lsm-l1-files">—</div>
-            <div class="lsm-layer-meta" id="l1-meta">—</div>
-          </div>
-          <div class="lsm-arrow">↓ value lookup</div>
-          <div class="lsm-layer lsm-layer-vlog">
-            <div class="lsm-layer-label">Value Log (VLog)</div>
-            <div class="lsm-layer-meta">Append-only · key-value separated · WiscKey architecture</div>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- Row 3: Bloom detail + WAL status -->
-    <section class="detail-row">
-      <div class="panel detail-panel">
-        <div class="panel-header">
-          <span class="panel-title">Bloom Filter Detail</span>
-        </div>
-        <div class="detail-stats">
-          <div class="stat-row">
-            <span class="stat-label">SSTables considered</span>
-            <span class="stat-val mono" id="stat-sst-considered">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Bloom skips</span>
-            <span class="stat-val mono cyan" id="stat-bloom-skips">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Binary searches executed</span>
-            <span class="stat-val mono" id="stat-sst-searches">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Skip rate</span>
-            <span class="stat-val mono cyan" id="stat-bloom-pct">—</span>
-          </div>
-        </div>
-        <div class="bloom-bar-wrap">
-          <div class="bloom-bar-fill" id="bloom-bar-fill" style="width:0%"></div>
-        </div>
-        <div class="bloom-bar-labels">
-          <span>0%</span><span>Skip rate</span><span>100%</span>
-        </div>
-      </div>
-
-      <div class="panel detail-panel">
-        <div class="panel-header">
-          <span class="panel-title">Engine Health</span>
-        </div>
-        <div class="detail-stats">
-          <div class="stat-row">
-            <span class="stat-label">WAL status</span>
-            <span class="stat-val mono" id="stat-wal-status">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Memtable fill</span>
-            <span class="stat-val mono" id="stat-mem-fill">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">L0 compaction pressure</span>
-            <span class="stat-val mono" id="stat-l0-pressure">—</span>
-          </div>
-          <div class="stat-row">
-            <span class="stat-label">Memtable entries</span>
-            <span class="stat-val mono" id="stat-mem-entries">—</span>
-          </div>
-        </div>
-        <div class="health-indicator" id="health-indicator">
-          <div class="health-dot" id="health-dot"></div>
-          <span id="health-label">Initializing...</span>
-        </div>
+      <div class="internals-grid">
+        <table class="audit-table">
+          <caption>WAL and VLog</caption>
+          <tbody id="file-log-body">
+            <tr><td colspan="3">Loading...</td></tr>
+          </tbody>
+        </table>
+        <table class="audit-table">
+          <caption>SSTables From Manifest</caption>
+          <thead><tr><th>Level</th><th>File</th><th>Bytes</th><th>Exists</th></tr></thead>
+          <tbody id="sstable-body">
+            <tr><td colspan="4">Loading...</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
-    <!-- Row 4: Interactive Console + Benchmark Runner -->
-    <section class="bottom-row">
-
-      <!-- Interactive Console -->
-      <div class="panel console-panel">
-        <div class="panel-header">
-          <span class="panel-title">Interactive Console</span>
-          <span class="panel-badge badge-neutral">live · zero-overhead</span>
-        </div>
-        <div class="console-output" id="console-output">
-          <div class="console-line console-welcome">
-            <span class="console-prefix">ForgeLSM&gt;</span>
-            <span>Engine introspector ready. Commands: put &lt;key&gt; &lt;value&gt; · get &lt;key&gt; · del &lt;key&gt;</span>
-          </div>
-        </div>
-        <form class="console-input-row" id="console-form" autocomplete="off">
-          <span class="console-prompt">ForgeLSM&gt;</span>
-          <input
-            id="console-input"
-            class="console-input"
-            type="text"
-            placeholder="put user:alice &quot;hello world&quot;"
-            spellcheck="false"
-            autocomplete="off"
-          />
-          <button class="console-submit" type="submit">↵</button>
-        </form>
-        <div class="console-hints">
-          <code>put &lt;key&gt; &lt;value&gt;</code>
-          <code>get &lt;key&gt;</code>
-          <code>del &lt;key&gt;</code>
+    <section class="audit-panel evidence-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Evidence Details</h1>
+          <p>Selected verification result with exact counts and structural transitions.</p>
         </div>
       </div>
-
-      <!-- Benchmark Runner -->
-      <div class="panel bench-panel">
-        <div class="panel-header">
-          <span class="panel-title">Benchmark Runner</span>
-          <span class="panel-badge badge-neutral">synchronous · isolated</span>
-        </div>
-        <div class="bench-controls">
-          <div class="bench-select-wrap">
-            <label class="bench-label">Workload</label>
-            <select id="bench-type" class="bench-select">
-              <option value="random_write">Random Write</option>
-              <option value="sequential_write">Sequential Write</option>
-              <option value="random_read">Random Read</option>
-              <option value="mixed">Mixed (70% R / 30% W)</option>
-            </select>
-          </div>
-          <div class="bench-select-wrap">
-            <label class="bench-label">Operations</label>
-            <select id="bench-ops" class="bench-select">
-              <option value="200">200</option>
-              <option value="500" selected>500</option>
-              <option value="1000">1,000</option>
-              <option value="2000">2,000</option>
-            </select>
-          </div>
-          <button id="bench-run" class="bench-run-btn">
-            <span id="bench-btn-text">▶ Run Benchmark</span>
-          </button>
-        </div>
-
-        <div class="bench-results" id="bench-results">
-          <div class="bench-placeholder">Results will appear here after running a benchmark.</div>
-        </div>
-
-        <div class="bench-explain">
-          Benchmarks run against an isolated <code>flsm_bench_dir</code> and clean up after themselves.
-          Engine production data is unaffected.
-        </div>
+      <table class="audit-table evidence-table">
+        <tbody>
+          <tr><th>Test</th><td id="ev-test">-</td></tr>
+          <tr><th>Requested events</th><td id="ev-requested">-</td></tr>
+          <tr><th>Model live keys</th><td id="ev-model">-</td></tr>
+          <tr><th>L0 flush transition</th><td id="ev-flush">-</td></tr>
+          <tr><th>Compaction transition</th><td id="ev-compaction">-</td></tr>
+          <tr><th>Deleted keys checked</th><td id="ev-deletes">-</td></tr>
+          <tr><th>VLog GC bytes</th><td id="ev-gc">-</td></tr>
+        </tbody>
+      </table>
+      <div class="step-list" id="verify-steps">
+        <div class="empty-state">Run a verification test to see proof steps.</div>
       </div>
-
     </section>
 
+    <section class="audit-panel raw-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Raw JSON Result Viewer</h1>
+          <p>Raw API payload from the most recent verification or state refresh.</p>
+        </div>
+      </div>
+      <pre id="verify-raw">{}</pre>
+    </section>
+
+    <section class="audit-panel limitations-panel">
+      <div class="panel-title-row">
+        <div>
+          <h1>Known Limitations</h1>
+          <p>Academic honesty: these are not hidden behind green metrics.</p>
+        </div>
+      </div>
+      <table class="audit-table">
+        <tbody>
+          <tr><th>VLog GC crash safety</th><td><span class="status-chip partial">Partial</span> Normal GC is verified; sudden crash during GC still needs redesign.</td></tr>
+          <tr><th>WAL corrupt tail</th><td><span class="status-chip partial">Partial</span> Corruption is detected; active truncation strategy is still a Track 1 decision.</td></tr>
+          <tr><th>SSTable fsync/rename hardening</th><td><span class="status-chip pending">Pending</span> Safe temp-file write path is planned for Track 1.</td></tr>
+          <tr><th>Manifest directory fsync</th><td><span class="status-chip pending">Pending</span> Commit logic works for normal cases but needs stronger crash-boundary hardening.</td></tr>
+          <tr><th>Production readiness</th><td><span class="status-chip partial">Not claimed</span> This is a local-first verified engine project, not a production database service.</td></tr>
+        </tbody>
+      </table>
+    </section>
   </main>
-
-  <!-- ── Footer ─────────────────────────────────────────────── -->
-  <footer class="site-footer">
-    <span>ForgeLSM — WiscKey-style LSM storage engine</span>
-    <span class="footer-sep">·</span>
-    <span>C++20 · Raw sockets · No external dependencies</span>
-    <span class="footer-sep">·</span>
-    <a href="https://github.com/Juixe7/ForgeLSM" target="_blank" rel="noopener" class="footer-link">GitHub ↗</a>
-  </footer>
 
   <script src="/app.js"></script>
 </body>

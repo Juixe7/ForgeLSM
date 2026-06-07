@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -280,6 +281,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/metrics") return handle_metrics();
         if (req.path == "/api/lsm-state") return handle_lsm_state();
         if (req.path == "/api/debug/state") return handle_debug_state();
+        if (req.path == "/api/debug/files") return handle_debug_files();
     }
     if (req.method == "POST") {
         if (req.path == "/api/put")    return handle_put(req);
@@ -455,6 +457,120 @@ HttpResponse HttpServer::handle_debug_state() {
     j << json_num ("vlog_bytes",          vlog_bytes);
     j << json_num ("user_bytes_written",  m.user_bytes_written);
     j << json_num ("storage_bytes_written", m.storage_bytes_written, true);
+    j << "}";
+
+    HttpResponse resp;
+    resp.body = j.str();
+    return resp;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// GET /api/debug/files
+// File-level storage evidence for the audit console.
+// ─────────────────────────────────────────────────────────────────
+HttpResponse HttpServer::handle_debug_files() {
+    const std::filesystem::path data_dir("flsm_production");
+    const std::filesystem::path manifest_path = data_dir / "MANIFEST";
+
+    auto file_size_json = [](const std::filesystem::path& path) -> uint64_t {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) return 0;
+        return static_cast<uint64_t>(std::filesystem::file_size(path, ec));
+    };
+
+    auto sst_name = [](uint32_t seq) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "sst_%06u.sst", seq);
+        return std::string(buf);
+    };
+
+    std::vector<std::string> wal_rows;
+    std::vector<std::filesystem::path> all_sst_paths;
+
+    std::error_code ec;
+    if (std::filesystem::exists(data_dir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(data_dir, ec)) {
+            if (ec) break;
+            auto path = entry.path();
+            auto name = path.filename().string();
+            if (name.rfind("wal_", 0) == 0 && path.extension() == ".log") {
+                std::ostringstream row;
+                row << "{\"file\":\"" << json_escape(name)
+                    << "\",\"bytes\":" << file_size_json(path) << "}";
+                wal_rows.push_back(row.str());
+            } else if (name.rfind("sst_", 0) == 0 && path.extension() == ".sst") {
+                all_sst_paths.push_back(path);
+            }
+        }
+    }
+
+    Manifest manifest;
+    bool manifest_loaded = manifest.load(manifest_path.string());
+    std::set<std::string> referenced_ssts;
+    if (manifest_loaded) {
+        for (uint32_t seq : manifest.l0_seqs) referenced_ssts.insert(sst_name(seq));
+        for (uint32_t seq : manifest.l1_seqs) referenced_ssts.insert(sst_name(seq));
+    }
+
+    std::vector<std::string> orphan_sst_rows;
+    for (const auto& path : all_sst_paths) {
+        auto name = path.filename().string();
+        if (referenced_ssts.find(name) != referenced_ssts.end()) continue;
+        std::ostringstream row;
+        row << "{\"level\":\"unreferenced\",\"file\":\"" << json_escape(name)
+            << "\",\"bytes\":" << file_size_json(path) << "}";
+        orphan_sst_rows.push_back(row.str());
+    }
+
+    auto emit_sst_list = [&](const std::vector<uint32_t>& seqs, const std::string& level) {
+        std::ostringstream out;
+        bool first = true;
+        for (uint32_t seq : seqs) {
+            if (!first) out << ",";
+            first = false;
+            auto name = sst_name(seq);
+            auto path = data_dir / name;
+            out << "{\"level\":\"" << level
+                << "\",\"sequence\":" << seq
+                << ",\"file\":\"" << json_escape(name)
+                << "\",\"bytes\":" << file_size_json(path)
+                << ",\"exists\":" << (std::filesystem::exists(path) ? "true" : "false")
+                << "}";
+        }
+        return out.str();
+    };
+
+    std::ostringstream j;
+    j << "{\n";
+    j << json_str("data_dir", data_dir.string());
+    j << json_bool("manifest_loaded", manifest_loaded);
+    j << json_num("manifest_version", manifest_loaded ? manifest.version : 0);
+    j << json_num("manifest_bytes", file_size_json(manifest_path));
+    j << "  \"wal_files\": [";
+    for (size_t i = 0; i < wal_rows.size(); ++i) {
+        if (i) j << ",";
+        j << wal_rows[i];
+    }
+    j << "],\n";
+    j << "  \"sstables\": [";
+    if (manifest_loaded) {
+        auto l0 = emit_sst_list(manifest.l0_seqs, "L0");
+        auto l1 = emit_sst_list(manifest.l1_seqs, "L1");
+        j << l0;
+        if (!l0.empty() && !l1.empty()) j << ",";
+        j << l1;
+    }
+    j << "],\n";
+    j << "  \"unreferenced_sstables\": [";
+    for (size_t i = 0; i < orphan_sst_rows.size(); ++i) {
+        if (i) j << ",";
+        j << orphan_sst_rows[i];
+    }
+    j << "],\n";
+    j << "  \"vlog\": {\"file\":\"vlog.bin\",\"bytes\":"
+      << file_size_json(data_dir / "vlog.bin")
+      << ",\"exists\":" << (std::filesystem::exists(data_dir / "vlog.bin") ? "true" : "false")
+      << "}\n";
     j << "}";
 
     HttpResponse resp;

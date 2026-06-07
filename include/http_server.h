@@ -57,6 +57,7 @@ struct HttpResponse {
 //   GET  /api/metrics       → EngineMetrics + derived ratios (JSON)
 //   GET  /api/lsm-state     → LSM tree state (JSON)
 //   GET  /api/debug/state   → Current storage state evidence (JSON)
+//   GET  /api/debug/files   → WAL/SSTable/VLog/Manifest file evidence (JSON)
 //   POST /api/put           → body: {"key":"k","value":"v"}
 //   POST /api/get           → body: {"key":"k"}
 //   POST /api/delete        → body: {"key":"k"}
@@ -89,6 +90,7 @@ private:
     HttpResponse handle_metrics();
     HttpResponse handle_lsm_state();
     HttpResponse handle_debug_state();
+    HttpResponse handle_debug_files();
     HttpResponse handle_put(const HttpRequest& req);
     HttpResponse handle_get(const HttpRequest& req);
     HttpResponse handle_delete(const HttpRequest& req);
