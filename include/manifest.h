@@ -12,6 +12,7 @@ public:
     uint32_t version = 0;
     std::vector<uint32_t> l0_seqs;
     std::vector<uint32_t> l1_seqs;
+    std::vector<uint32_t> l2_seqs;
 
     // Load from the given manifest file. Returns true on success.
     bool load(const std::string& path);

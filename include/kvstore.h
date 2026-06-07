@@ -38,6 +38,14 @@ struct EngineMetrics {
     }
 };
 
+struct KVStoreOptions {
+    size_t flush_threshold = 4u * 1024u * 1024u;
+    size_t l0_hard_limit = 15;
+    size_t l1_hard_limit = 12;
+    bool trace_enabled = false;
+    std::string trace_path;
+};
+
 // KVStore — engine core (Phase 2).
 //
 // Write path (strict order):
@@ -55,6 +63,7 @@ struct EngineMetrics {
 class KVStore {
 public:
     explicit KVStore(const std::string& data_dir);
+    KVStore(const std::string& data_dir, const KVStoreOptions& options);
 
     void put(const std::string& key, const std::string& value);
     void delete_key(const std::string& key);
@@ -73,15 +82,19 @@ public:
     // ── Observability accessors (used by HttpServer) ──────────────
     size_t l0_count()            const { return l0_sstables_.size(); }
     size_t l1_count()            const { return l1_sstables_.size(); }
+    size_t l2_count()            const { return l2_sstables_.size(); }
     size_t active_byte_size()    const { return active_ ? active_->byte_size() : 0; }
     size_t memtable_entries()    const { return active_ ? active_->size() : 0; }
-    size_t flush_threshold_bytes() const { return FLUSH_THRESHOLD; }
-    size_t l0_hard_limit()       const { return L0_HARD_LIMIT; }
+    size_t flush_threshold_bytes() const { return options_.flush_threshold; }
+    size_t l0_hard_limit()       const { return options_.l0_hard_limit; }
+    size_t l1_hard_limit()       const { return options_.l1_hard_limit; }
 
     // Verification/admin hooks used by the local dashboard. These keep the
     // public app surface small while allowing the UI to prove storage behavior.
     void force_flush() { flush(); }
     void force_compaction() { compact_l0_to_l1(); }
+    void force_l1_compaction() { compact_l1_to_l2(); }
+    void trace_event(const std::string& event, const std::string& detail) const;
     
     // Test helper to explicitly disable bloom filter and evaluate invariant equivalence
     void bypass_bloom(bool bypass) { disable_bloom_ = bypass; }
@@ -94,6 +107,7 @@ private:
     void     flush();
     void     rotate_wal();
     void     compact_l0_to_l1();
+    void     compact_l1_to_l2();
     uint32_t next_sst_sequence() const;
 
     std::string manifest_path() const;
@@ -111,13 +125,13 @@ private:
     Manifest                     manifest_;
     std::vector<SSTableReader>   l0_sstables_; // sorted newest-first
     std::vector<SSTableReader>   l1_sstables_; // non-overlapping
+    std::vector<SSTableReader>   l2_sstables_; // colder non-overlapping run
     uint32_t                     current_wal_id_ = 1;
     bool                         disable_bloom_ = false;
-
-    static constexpr size_t FLUSH_THRESHOLD = 4u * 1024u * 1024u;  // 4 MiB
-    static constexpr size_t L0_HARD_LIMIT   = 15;
+    KVStoreOptions               options_;
 
     friend void run_compaction(KVStore* store);
+    friend void run_l1_to_l2_compaction(KVStore* store);
     friend void run_vlog_gc(KVStore* store);
 };
 

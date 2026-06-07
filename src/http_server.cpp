@@ -289,6 +289,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/delete") return handle_delete(req);
         if (req.path == "/api/bench")  return handle_bench(req);
         if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
+        if (req.path == "/api/demo/run") return handle_demo_run(req);
         if (req.path == "/api/verify/basic") return handle_verify(req, "basic");
         if (req.path == "/api/verify/overwrite") return handle_verify(req, "overwrite");
         if (req.path == "/api/verify/delete") return handle_verify(req, "delete");
@@ -378,6 +379,7 @@ HttpResponse HttpServer::handle_lsm_state() {
     size_t flush_thresh = store_.flush_threshold_bytes();
     size_t l0           = store_.l0_count();
     size_t l1           = store_.l1_count();
+    size_t l2           = store_.l2_count();
     size_t l0_limit     = store_.l0_hard_limit();
     bool   tainted      = store_.wal_tainted();
 
@@ -399,6 +401,7 @@ HttpResponse HttpServer::handle_lsm_state() {
     j << json_dbl ("memtable_fill_pct",   mem_fill_pct);
     j << json_num ("l0_count",            static_cast<uint64_t>(l0));
     j << json_num ("l1_count",            static_cast<uint64_t>(l1));
+    j << json_num ("l2_count",            static_cast<uint64_t>(l2));
     j << json_num ("l0_limit",            static_cast<uint64_t>(l0_limit));
     j << json_dbl ("l0_pressure_pct",     l0_pressure_pct);
     j << json_bool("wal_tainted",         tainted, true);
@@ -450,6 +453,7 @@ HttpResponse HttpServer::handle_debug_state() {
     j << json_num ("flush_threshold",     static_cast<uint64_t>(store_.flush_threshold_bytes()));
     j << json_num ("l0_count",            static_cast<uint64_t>(store_.l0_count()));
     j << json_num ("l1_count",            static_cast<uint64_t>(store_.l1_count()));
+    j << json_num ("l2_count",            static_cast<uint64_t>(store_.l2_count()));
     j << json_bool("wal_tainted",         store_.wal_tainted());
     j << json_num ("wal_files",           wal_files);
     j << json_num ("wal_bytes",           wal_bytes);
@@ -511,6 +515,7 @@ HttpResponse HttpServer::handle_debug_files() {
     if (manifest_loaded) {
         for (uint32_t seq : manifest.l0_seqs) referenced_ssts.insert(sst_name(seq));
         for (uint32_t seq : manifest.l1_seqs) referenced_ssts.insert(sst_name(seq));
+        for (uint32_t seq : manifest.l2_seqs) referenced_ssts.insert(sst_name(seq));
     }
 
     std::vector<std::string> orphan_sst_rows;
@@ -557,9 +562,12 @@ HttpResponse HttpServer::handle_debug_files() {
     if (manifest_loaded) {
         auto l0 = emit_sst_list(manifest.l0_seqs, "L0");
         auto l1 = emit_sst_list(manifest.l1_seqs, "L1");
+        auto l2 = emit_sst_list(manifest.l2_seqs, "L2");
         j << l0;
         if (!l0.empty() && !l1.empty()) j << ",";
         j << l1;
+        if ((!l0.empty() || !l1.empty()) && !l2.empty()) j << ",";
+        j << l2;
     }
     j << "],\n";
     j << "  \"unreferenced_sstables\": [";
@@ -734,6 +742,9 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<std::string> sample_keys;
     std::vector<std::string> sample_values;
+    std::filesystem::create_directories("iot_workloads");
+    const std::string workload_path = "iot_workloads/latest_production_workload.jsonl";
+    std::ofstream workload_file(workload_path, std::ios::trunc);
 
     try {
         for (long long i = 0; i < requested_events; ++i) {
@@ -760,6 +771,10 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
 
             std::string key = key_buf;
             std::string payload = value.str();
+            if (workload_file) {
+                workload_file << "{\"op\":\"put\",\"key\":\"" << json_escape(key)
+                              << "\",\"value\":\"" << json_escape(payload) << "\"}\n";
+            }
             store_.put(key, payload);
 
             if (i == 0 || i == requested_events / 2 || i == requested_events - 1) {
@@ -809,6 +824,7 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     j << json_num("l1_after", l1_after);
     j << json_num("user_bytes_delta", user_delta);
     j << json_num("storage_bytes_delta", storage_delta);
+    j << json_str("workload_file", workload_path);
     j << json_dbl("elapsed_s", elapsed_s);
     j << json_dbl("throughput", throughput);
     j << "  \"trace\": [";
@@ -824,6 +840,137 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     HttpResponse resp;
     resp.body = j.str();
     return resp;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// POST /api/demo/run — small-threshold visual LSM demo
+// Demonstrates writes, overwrites, deletes, flushes, L0->L1, and L1->L2.
+// ─────────────────────────────────────────────────────────────────
+HttpResponse HttpServer::handle_demo_run(const HttpRequest& req) {
+    long long requested_events = json_get_int(req.body, "events", 240);
+    if (requested_events < 60) requested_events = 60;
+    if (requested_events > 2000) requested_events = 2000;
+
+    const std::string demo_dir = "flsm_demo_lab";
+    const std::string trace_path = demo_dir + "/engine_trace.log";
+    std::error_code ec;
+    std::filesystem::remove_all(demo_dir, ec);
+
+    KVStoreOptions options;
+    options.flush_threshold = 32u * 1024u;
+    options.l0_hard_limit = 2;
+    options.l1_hard_limit = 2;
+    options.trace_enabled = true;
+    options.trace_path = trace_path;
+
+    std::vector<std::string> timeline;
+    auto add_step = [&](const std::string& phase, KVStore& db) {
+        std::ostringstream row;
+        row << "{\"phase\":\"" << json_escape(phase)
+            << "\",\"memtable_entries\":" << db.memtable_entries()
+            << ",\"l0\":" << db.l0_count()
+            << ",\"l1\":" << db.l1_count()
+            << ",\"l2\":" << db.l2_count()
+            << "}";
+        timeline.push_back(row.str());
+    };
+
+    try {
+        KVStore db(demo_dir, options);
+        add_step("empty demo store", db);
+
+        std::string pad(900, 'x');
+        for (long long i = 0; i < requested_events; ++i) {
+            std::ostringstream value;
+            value << "{\"device_id\":\"demo_device_" << (i % 8)
+                  << "\",\"sequence\":" << i
+                  << ",\"kind\":\"insert\",\"payload\":\"" << pad << "\"}";
+            db.put("demo:event:" + std::to_string(i), value.str());
+        }
+        add_step("bulk inserts reached multiple memtable flushes", db);
+
+        for (long long i = 0; i < requested_events / 6; ++i) {
+            std::ostringstream value;
+            value << "{\"device_id\":\"demo_device_" << (i % 8)
+                  << "\",\"sequence\":" << i
+                  << ",\"kind\":\"overwrite\",\"payload\":\"" << pad << "\"}";
+            db.put("demo:event:" + std::to_string(i), value.str());
+        }
+        add_step("overwrites added newer versions", db);
+
+        for (long long i = requested_events / 2; i < requested_events / 2 + requested_events / 10; ++i) {
+            db.delete_key("demo:event:" + std::to_string(i));
+        }
+        db.force_flush();
+        add_step("deletes written as tombstones and flushed to L0", db);
+
+        db.force_compaction();
+        add_step("forced L0 to L1 compaction", db);
+
+        for (long long i = requested_events; i < requested_events + requested_events / 3; ++i) {
+            std::ostringstream value;
+            value << "{\"device_id\":\"demo_device_" << (i % 8)
+                  << "\",\"sequence\":" << i
+                  << ",\"kind\":\"second-wave\",\"payload\":\"" << pad << "\"}";
+            db.put("demo:event:" + std::to_string(i), value.str());
+        }
+        db.force_flush();
+        db.force_compaction();
+        add_step("second wave compacted into another L1 run", db);
+
+        db.force_l1_compaction();
+        add_step("forced L1 to L2 compaction", db);
+
+        std::string deleted_value;
+        bool deleted_found = db.get("demo:event:" + std::to_string(requested_events / 2), deleted_value);
+        std::string overwritten_value;
+        bool overwritten_found = db.get("demo:event:0", overwritten_value);
+
+        std::vector<std::string> trace_lines;
+        std::ifstream trace(trace_path);
+        std::string line;
+        while (std::getline(trace, line)) {
+            trace_lines.push_back(line);
+            if (trace_lines.size() > 80) trace_lines.erase(trace_lines.begin());
+        }
+
+        std::ostringstream j;
+        j << "{\n";
+        j << json_str("status", (!deleted_found && overwritten_found) ? "pass" : "fail");
+        j << json_num("events_requested", static_cast<uint64_t>(requested_events));
+        j << json_num("flush_threshold", static_cast<uint64_t>(options.flush_threshold));
+        j << json_num("l0_limit", static_cast<uint64_t>(options.l0_hard_limit));
+        j << json_num("l1_limit", static_cast<uint64_t>(options.l1_hard_limit));
+        j << json_num("final_memtable_entries", static_cast<uint64_t>(db.memtable_entries()));
+        j << json_num("final_l0", static_cast<uint64_t>(db.l0_count()));
+        j << json_num("final_l1", static_cast<uint64_t>(db.l1_count()));
+        j << json_num("final_l2", static_cast<uint64_t>(db.l2_count()));
+        j << json_bool("deleted_key_found", deleted_found);
+        j << json_bool("overwritten_key_found", overwritten_found);
+        j << json_str("trace_file", trace_path);
+        j << "  \"timeline\": [";
+        for (size_t i = 0; i < timeline.size(); ++i) {
+            if (i) j << ",";
+            j << timeline[i];
+        }
+        j << "],\n";
+        j << "  \"trace\": [";
+        for (size_t i = 0; i < trace_lines.size(); ++i) {
+            if (i) j << ",";
+            j << "\"" << json_escape(trace_lines[i]) << "\"";
+        }
+        j << "]\n";
+        j << "}";
+
+        HttpResponse resp;
+        resp.body = j.str();
+        return resp;
+    } catch (const std::exception& e) {
+        HttpResponse resp;
+        resp.status = 500;
+        resp.body = std::string(R"({"error":")") + json_escape(e.what()) + "\"}";
+        return resp;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────

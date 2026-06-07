@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -63,8 +64,16 @@ void KVStore::scan_wal_files(std::vector<std::string>& paths, uint32_t& max_id) 
 // ── Constructor ────────────────────────────────────────────────
 
 KVStore::KVStore(const std::string& data_dir)
-    : data_dir_(data_dir) {
+    : KVStore(data_dir, KVStoreOptions{}) {}
+
+KVStore::KVStore(const std::string& data_dir, const KVStoreOptions& options)
+    : data_dir_(data_dir), options_(options) {
+    if (options_.trace_path.empty()) options_.trace_path = data_dir_ + "/engine_trace.log";
     std::filesystem::create_directories(data_dir_);
+    if (options_.trace_enabled) {
+        std::ofstream out(options_.trace_path, std::ios::app);
+        out << "[trace] open store dir=" << data_dir_ << "\n";
+    }
     recover();
 }
 
@@ -72,20 +81,25 @@ KVStore::KVStore(const std::string& data_dir)
 
 void KVStore::delete_key(const std::string& key) {
     maybe_flush();
+    trace_event("delete:start", "key=" + key);
     if (!wal_->append_delete(key))
         throw std::runtime_error("[KVStore] WAL append_delete failed");
+    trace_event("wal:append-delete", "key=" + key);
     if (!wal_->sync())
         throw std::runtime_error("[KVStore] WAL sync failed");
+    trace_event("wal:sync", "delete key=" + key);
 
     VLogPointer ptr;
     ptr.length = 0;
     ptr.offset = std::numeric_limits<uint64_t>::max();
     ptr.file_id = current_wal_id_;
     active_->put(key, ptr);
+    trace_event("memtable:tombstone", "key=" + key);
 }
 
 void KVStore::put(const std::string& key, const std::string& value) {
     maybe_flush();
+    trace_event("put:start", "key=" + key + " value_bytes=" + std::to_string(value.size()));
 
     // Step 1: WAL append (full key + value).
     // Write Amp Metric additions
@@ -95,22 +109,27 @@ void KVStore::put(const std::string& key, const std::string& value) {
 
     if (!wal_->append(key, value))
         throw std::runtime_error("[KVStore] WAL append failed");
+    trace_event("wal:append", "key=" + key);
 
     // Step 2: WAL sync — durability boundary.
     if (!wal_->sync())
         throw std::runtime_error("[KVStore] WAL sync failed");
+    trace_event("wal:sync", "key=" + key);
 
     // Step 3: VLog append — returns pointer.
     VLogPointer ptr;
     if (!vlog_->append(value, ptr))
         throw std::runtime_error("[KVStore] VLog append failed");
+    trace_event("vlog:append", "key=" + key + " offset=" + std::to_string(ptr.offset) + " bytes=" + std::to_string(ptr.length));
 
     // Step 4: VLog sync — pointer validity boundary.
     if (!vlog_->sync())
         throw std::runtime_error("[KVStore] VLog sync failed — pointer NOT inserted");
+    trace_event("vlog:sync", "key=" + key);
 
     // Step 5: Memtable put — only reached if all above succeeded.
     active_->put(key, ptr);
+    trace_event("memtable:put", "key=" + key + " entries=" + std::to_string(active_->size()));
 }
 
 // ── Read path ──────────────────────────────────────────────────
@@ -168,6 +187,24 @@ bool KVStore::get(const std::string& key, std::string& out_value) const {
         }
     }
 
+    // 5. L2 SSTables — colder compacted level.
+    for (const auto& sst : l2_sstables_) {
+        if (sst.overlaps(key, key)) {
+            metrics_.sst_considered++;
+            if (!disable_bloom_ && !sst.bloom().may_contain(key)) {
+                metrics_.bloom_skips++;
+                continue;
+            }
+
+            metrics_.sst_searches++;
+            if (sst.get(key, ptr)) {
+                if (is_tombstone(ptr)) return false;
+                metrics_.vlog_reads++;
+                return vlog_->read_at(ptr, out_value);
+            }
+        }
+    }
+
     return false;
 }
 
@@ -178,10 +215,13 @@ void KVStore::maybe_flush() {
     // Put() calls maybe_flush(), which directly and synchronously executes compaction 
     // when L0 threshold is exceeded. Because Phase 3 is explicitly single-threaded 
     // and holds no cross-thread locks, there is NO deadlock risk.
-    if (l0_sstables_.size() > L0_HARD_LIMIT) {
+    if (l1_sstables_.size() > options_.l1_hard_limit) {
+        compact_l1_to_l2();
+    }
+    if (l0_sstables_.size() > options_.l0_hard_limit) {
         compact_l0_to_l1();
     }
-    if (!active_ || active_->byte_size() < FLUSH_THRESHOLD) return;
+    if (!active_ || active_->byte_size() < options_.flush_threshold) return;
     flush();
 }
 
@@ -189,6 +229,7 @@ void KVStore::flush() {
     if (!active_ || active_->size() == 0) return;
 
     // 1. Freeze active → immutable.
+    trace_event("flush:start", "entries=" + std::to_string(active_->size()) + " bytes=" + std::to_string(active_->byte_size()));
     immutable_ = std::move(active_);
     active_ = std::make_unique<Memtable>();
 
@@ -203,12 +244,14 @@ void KVStore::flush() {
 
     if (!SSTableWriter::write(path, immutable_->entries()))
         throw std::runtime_error("[KVStore] SSTable flush failed");
+    trace_event("sstable:write", path);
 
     // 3. Update manifest atomically. New SST forms L0 and is visible AFTER commit.
     manifest_.version++;
     manifest_.l0_seqs.push_back(seq);
     if (!manifest_.commit(manifest_path()))
         throw std::runtime_error("[KVStore] Manifest commit failed during flush");
+    trace_event("manifest:commit", "L0 add seq=" + std::to_string(seq));
 
     // 4. Load the new SSTable.
     SSTableReader reader;
@@ -226,6 +269,7 @@ void KVStore::flush() {
     std::cout << "[KVStore] Flushed SSTable sst_"
               << std::string(6 - std::to_string(seq).size(), '0') + std::to_string(seq)
               << "\n";
+    trace_event("flush:done", "seq=" + std::to_string(seq));
 }
 
 // ── WAL rotation (crash-safe, I19) ─────────────────────────────
@@ -276,7 +320,7 @@ void KVStore::recover() {
     //   If SSTables exist → keep vlog (SST pointers reference it).
     //   If no SSTables    → safe to recreate vlog from WAL.
     auto vp = vlog_path();
-    if (l0_sstables_.empty() && l1_sstables_.empty()) {
+    if (l0_sstables_.empty() && l1_sstables_.empty() && l2_sstables_.empty()) {
         std::error_code ec;
         std::filesystem::remove(vp, ec);
     }
@@ -323,8 +367,8 @@ void KVStore::recover() {
 
     std::cout << "[KVStore] Recovered " << total_entries << " entries from "
               << wal_files.size() << " WAL(s)";
-    if (!l0_sstables_.empty() || !l1_sstables_.empty())
-        std::cout << ", loaded " << (l0_sstables_.size() + l1_sstables_.size()) << " SSTables";
+    if (!l0_sstables_.empty() || !l1_sstables_.empty() || !l2_sstables_.empty())
+        std::cout << ", loaded " << (l0_sstables_.size() + l1_sstables_.size() + l2_sstables_.size()) << " SSTables";
     if (any_tainted)
         std::cout << " (WAL TAINTED)";
     std::cout << "\n";
@@ -335,6 +379,7 @@ void KVStore::recover() {
 void KVStore::load_sstables() {
     l0_sstables_.clear();
     l1_sstables_.clear();
+    l2_sstables_.clear();
     if (!std::filesystem::exists(data_dir_)) return;
 
     if (!manifest_.load(manifest_path())) {
@@ -362,10 +407,24 @@ void KVStore::load_sstables() {
             std::cerr << "[KVStore] WARNING: Manifest invalid L1 SSTable " << seq << "\n";
         }
     }
+
+    // Load L2 files.
+    for (uint32_t seq : manifest_.l2_seqs) {
+        SSTableReader reader;
+        if (reader.load(sst_path(seq))) {
+            l2_sstables_.push_back(std::move(reader));
+        } else {
+            std::cerr << "[KVStore] WARNING: Manifest invalid L2 SSTable " << seq << "\n";
+        }
+    }
 }
 
 void KVStore::compact_l0_to_l1() {
     run_compaction(this);
+}
+
+void KVStore::compact_l1_to_l2() {
+    run_l1_to_l2_compaction(this);
 }
 
 // ── Diagnostics ────────────────────────────────────────────────
@@ -378,4 +437,11 @@ size_t KVStore::memtable_size() const {
 
 bool KVStore::wal_tainted() const {
     return wal_ && wal_->is_tainted();
+}
+
+void KVStore::trace_event(const std::string& event, const std::string& detail) const {
+    if (!options_.trace_enabled) return;
+    std::ofstream out(options_.trace_path, std::ios::app);
+    if (!out) return;
+    out << event << " | " << detail << "\n";
 }

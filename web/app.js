@@ -11,6 +11,11 @@ const els = {
   prodDevices: document.getElementById('prod-devices'),
   prodRaw: document.getElementById('prod-raw'),
   prodTrace: document.getElementById('prod-trace'),
+  demoRun: document.getElementById('demo-run'),
+  demoEvents: document.getElementById('demo-events'),
+  demoRaw: document.getElementById('demo-raw'),
+  demoTrace: document.getElementById('demo-trace'),
+  demoTimeline: document.getElementById('demo-timeline'),
   verifyRun: document.getElementById('verify-run'),
   verifyOps: document.getElementById('verify-ops'),
   matrix: document.getElementById('verification-matrix'),
@@ -81,6 +86,7 @@ function renderSystem(metrics, lsm, debug) {
   setText('state-flush-threshold', fmtBytes(lsm.flush_threshold));
   setText('state-l0', `${fmtNum(lsm.l0_count)} / ${fmtNum(lsm.l0_limit)} files`);
   setText('state-l1', `${fmtNum(lsm.l1_count)} files`);
+  setText('state-l2', `${fmtNum(lsm.l2_count)} files`);
   setText('state-wal', debug.wal_tainted ? 'TAINTED' : `Clean, ${fmtNum(debug.wal_files)} file(s), ${fmtBytes(debug.wal_bytes)}`);
   setText('state-write-amp', fmtAmp(metrics.write_amplification));
   setText('state-read-amp', fmtAmp(metrics.read_amplification));
@@ -198,6 +204,51 @@ function setMatrixCell(test, status) {
   cell.className = statusClass(status);
 }
 
+function renderDemoTimeline(timeline) {
+  const rows = Array.isArray(timeline) ? timeline : [];
+  els.demoTimeline.innerHTML = rows.length
+    ? rows.map((entry) => `
+        <div class="step-row pass">
+          <div class="step-status">LSM</div>
+          <div>
+            <div class="step-name">${escapeHtml(entry.phase || 'demo step')}</div>
+            <div class="step-detail">mem=${fmtNum(entry.memtable_entries)} | L0=${fmtNum(entry.l0)} | L1=${fmtNum(entry.l1)} | L2=${fmtNum(entry.l2)}</div>
+          </div>
+        </div>
+      `).join('')
+    : '<div class="empty-state">No timeline returned.</div>';
+}
+
+function setDemoBusy(isBusy) {
+  els.demoRun.disabled = isBusy;
+  els.demoRun.textContent = isBusy ? 'Running...' : 'Run Demo';
+}
+
+async function runDemo() {
+  const events = parseInt(els.demoEvents.value, 10);
+  setDemoBusy(true);
+  setText('demo-status', 'RUNNING');
+  byId('demo-status').className = 'pending';
+  try {
+    const result = await postJson('/api/demo/run', {events});
+    setText('demo-status', String(result.status || 'fail').toUpperCase());
+    byId('demo-status').className = statusClass(result.status);
+    setText('demo-l0', fmtNum(result.final_l0));
+    setText('demo-l1', fmtNum(result.final_l1));
+    setText('demo-l2', fmtNum(result.final_l2));
+    renderDemoTimeline(result.timeline);
+    els.demoTrace.textContent = Array.isArray(result.trace) ? result.trace.join('\n') : '';
+    els.demoRaw.textContent = JSON.stringify(result, null, 2);
+  } catch (err) {
+    setText('demo-status', 'FAIL');
+    byId('demo-status').className = 'fail';
+    els.demoRaw.textContent = JSON.stringify({error: err.message}, null, 2);
+    els.demoTrace.textContent = err.message;
+  } finally {
+    setDemoBusy(false);
+  }
+}
+
 function renderVerification(result) {
   const status = result.status || 'fail';
   const mismatches = Array.isArray(result.mismatches) ? result.mismatches.length : 0;
@@ -278,6 +329,7 @@ document.querySelectorAll('.tab-btn').forEach((button) => {
 
 els.refreshState.addEventListener('click', () => refreshState(true));
 els.prodRun.addEventListener('click', runProductionWorkload);
+els.demoRun.addEventListener('click', runDemo);
 els.verifyRun.addEventListener('click', () => runVerification('full'));
 els.matrix.addEventListener('click', (event) => {
   const button = event.target.closest('.matrix-btn');

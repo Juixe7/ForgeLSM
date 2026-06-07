@@ -63,6 +63,7 @@ struct HttpResponse {
 //   POST /api/delete        → body: {"key":"k"}
 //   POST /api/bench         → body: {"type":"random_write","ops":500}
 //   POST /api/iot/bulk      → body: {"events":10000,"devices":16}
+//   POST /api/demo/run      → run small-threshold visual LSM demo
 //   POST /api/verify/<name> → isolated correctness verification run
 //
 // All API responses include CORS headers so the dashboard can be
@@ -97,6 +98,7 @@ private:
     HttpResponse handle_delete(const HttpRequest& req);
     HttpResponse handle_bench(const HttpRequest& req);
     HttpResponse handle_iot_bulk(const HttpRequest& req);
+    HttpResponse handle_demo_run(const HttpRequest& req);
     HttpResponse handle_verify(const HttpRequest& req, const std::string& test);
 
     // ── Minimal hand-rolled JSON helpers ─────────────────────────

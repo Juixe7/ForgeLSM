@@ -59,6 +59,7 @@ bool Manifest::load(const std::string& path) {
 
     l0_seqs.clear();
     l1_seqs.clear();
+    l2_seqs.clear();
 
     while (in >> token) {
         if (token == "L0") {
@@ -75,6 +76,13 @@ bool Manifest::load(const std::string& path) {
                 uint32_t seq;
                 if (in >> seq) l1_seqs.push_back(seq);
             }
+        } else if (token == "L2") {
+            size_t count;
+            if (!(in >> count)) return false;
+            for (size_t i = 0; i < count; ++i) {
+                uint32_t seq;
+                if (in >> seq) l2_seqs.push_back(seq);
+            }
         }
     }
     return true;
@@ -90,6 +98,8 @@ bool Manifest::commit(const std::string& path) const {
     for (uint32_t seq : l0_seqs) oss << seq << " ";
     oss << "\nL1 " << l1_seqs.size() << "\n";
     for (uint32_t seq : l1_seqs) oss << seq << " ";
+    oss << "\nL2 " << l2_seqs.size() << "\n";
+    for (uint32_t seq : l2_seqs) oss << seq << " ";
     oss << "\n";
 
     std::string payload = oss.str();

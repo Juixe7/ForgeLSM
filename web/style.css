@@ -418,7 +418,9 @@ button:disabled {
 }
 
 #verify-raw,
-#prod-raw {
+#prod-raw,
+#demo-raw,
+#demo-trace {
   min-height: 360px;
   max-height: 560px;
   overflow: auto;
@@ -430,6 +432,10 @@ button:disabled {
   color: #c8d3df;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+#demo-trace {
+  min-height: 280px;
 }
 
 .status-chip {

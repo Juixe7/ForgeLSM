@@ -27,6 +27,7 @@
 
   <nav class="view-tabs" aria-label="Console views">
     <button class="tab-btn active" data-view="production-view">Production IoT</button>
+    <button class="tab-btn" data-view="demo-view">Demo Mode</button>
     <button class="tab-btn" data-view="verification-view">Verification Lab</button>
   </nav>
 
@@ -48,6 +49,7 @@
               <tr><th>Flush threshold</th><td id="state-flush-threshold">-</td></tr>
               <tr><th>L0 SSTables</th><td id="state-l0">-</td></tr>
               <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
+              <tr><th>L2 SSTables</th><td id="state-l2">-</td></tr>
               <tr><th>WAL status</th><td id="state-wal">-</td></tr>
               <tr><th>Write amplification</th><td id="state-write-amp">-</td></tr>
               <tr><th>Read amplification</th><td id="state-read-amp">-</td></tr>
@@ -136,6 +138,69 @@
           <div class="step-list" id="prod-trace">
             <div class="empty-state">Run a production workload to see the trace.</div>
           </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="demo-view">
+      <div class="audit-shell">
+        <section class="audit-panel workload-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Demo Scenario</h1>
+              <p>Runs in <code>flsm_demo_lab</code> with 32 KB memtable and low compaction limits.</p>
+            </div>
+          </div>
+          <div class="control-row">
+            <label>
+              Demo events
+              <select id="demo-events">
+                <option value="120">120 events</option>
+                <option value="240" selected>240 events</option>
+                <option value="500">500 events</option>
+                <option value="1000">1K events</option>
+              </select>
+            </label>
+            <button class="primary-btn" id="demo-run">Run Demo</button>
+          </div>
+          <div class="workload-summary">
+            <div><span>Status</span><strong id="demo-status">Not run</strong></div>
+            <div><span>Final L0</span><strong id="demo-l0">-</strong></div>
+            <div><span>Final L1</span><strong id="demo-l1">-</strong></div>
+            <div><span>Final L2</span><strong id="demo-l2">-</strong></div>
+          </div>
+        </section>
+
+        <section class="audit-panel evidence-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Demo Timeline</h1>
+              <p>Shows how tables move through the LSM levels during the demo scenario.</p>
+            </div>
+          </div>
+          <div class="step-list" id="demo-timeline">
+            <div class="empty-state">Run the demo to see level transitions.</div>
+          </div>
+        </section>
+
+        <section class="audit-panel trace-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Demo Trace Console</h1>
+              <p>Latest granular engine trace lines from the demo run.</p>
+            </div>
+          </div>
+          <pre id="demo-trace">{}</pre>
+        </section>
+
+        <section class="audit-panel raw-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Raw Demo JSON</h1>
+              <p>Full demo payload, including thresholds and tombstone checks.</p>
+            </div>
+          </div>
+          <pre id="demo-raw">{}</pre>
         </section>
       </div>
     </section>
