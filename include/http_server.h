@@ -113,7 +113,7 @@ private:
     HttpResponse handle_stream_status();
     HttpResponse handle_demo_run(const HttpRequest& req);
     HttpResponse handle_verify(const HttpRequest& req, const std::string& test);
-    void run_stream_worker(uint64_t operations, uint64_t devices);
+    void run_stream_worker(uint64_t operations, uint64_t devices, const std::string& mode);
     void append_stream_log(const std::string& line);
 
     // ── Minimal hand-rolled JSON helpers ─────────────────────────
@@ -158,6 +158,10 @@ private:
     uint64_t stream_l0_before_ = 0;
     uint64_t stream_l1_before_ = 0;
     uint64_t stream_l2_before_ = 0;
+    uint64_t stream_unique_telemetry_ = 0;
+    uint64_t stream_unique_state_ = 0;
+    uint64_t stream_successful_delete_targets_ = 0;
+    std::string stream_mode_ = "stream1";
     std::string stream_status_ = "idle";
     std::string stream_workload_file_;
     std::deque<std::string> stream_log_;

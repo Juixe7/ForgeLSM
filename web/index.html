@@ -72,6 +72,13 @@
           </div>
           <div class="control-row">
             <label>
+              Stream logic
+              <select id="stream-mode">
+                <option value="stream1" selected>Stream 1</option>
+                <option value="stream2">Stream 2</option>
+              </select>
+            </label>
+            <label>
               Operations
               <select id="stream-ops">
                 <option value="1000">1K ops</option>
@@ -109,8 +116,12 @@
           </div>
           <table class="audit-table">
             <tbody>
+              <tr><th>Stream logic</th><td id="last-mode">-</td></tr>
               <tr><th>Completed operations</th><td id="last-completed">-</td></tr>
               <tr><th>Put/update/delete/get</th><td id="last-mix">-</td></tr>
+              <tr><th>Unique telemetry keys</th><td id="last-unique-telemetry">-</td></tr>
+              <tr><th>Unique state/config keys</th><td id="last-unique-state">-</td></tr>
+              <tr><th>Successful delete targets</th><td id="last-delete-targets">-</td></tr>
               <tr><th>Logical bytes written</th><td id="last-logical">-</td></tr>
               <tr><th>Physical bytes written</th><td id="last-physical">-</td></tr>
               <tr><th>Write amplification</th><td id="last-write-amp">-</td></tr>

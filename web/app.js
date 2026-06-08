@@ -11,6 +11,7 @@ const els = {
   prodTrace: document.getElementById('prod-trace'),
   streamStart: document.getElementById('stream-start'),
   streamStop: document.getElementById('stream-stop'),
+  streamMode: document.getElementById('stream-mode'),
   streamOps: document.getElementById('stream-ops'),
   streamDevices: document.getElementById('stream-devices'),
   demoRun: document.getElementById('demo-run'),
@@ -178,8 +179,12 @@ function renderStreamStatus(status) {
     `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`
   );
   setText('stream-file', status.workload_file || '-');
+  setText('last-mode', status.mode === 'stream2' ? 'Stream 2' : 'Stream 1');
   setText('last-completed', `${fmtNum(status.completed_operations)} / ${fmtNum(status.target_operations)} ops`);
   setText('last-mix', `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`);
+  setText('last-unique-telemetry', fmtNum(status.unique_telemetry_keys));
+  setText('last-unique-state', fmtNum(status.unique_state_keys));
+  setText('last-delete-targets', fmtNum(status.successful_delete_targets));
   setText('last-logical', fmtBytes(status.logical_bytes_delta));
   setText('last-physical', fmtBytes(status.physical_bytes_delta));
   setText('last-write-amp', fmtAmp(status.write_amplification));
@@ -217,6 +222,7 @@ async function startStream() {
   els.streamStart.disabled = true;
   try {
     await postJson('/api/stream/start', {
+      mode: els.streamMode.value,
       operations: parseInt(els.streamOps.value, 10),
       devices: parseInt(els.streamDevices.value, 10),
     });

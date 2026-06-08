@@ -295,6 +295,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
         if (req.path == "/api/production/reset") return handle_production_reset();
         if (req.path == "/api/stream/start") return handle_stream_start(req);
+        if (req.path == "/api/stream2/start") return handle_stream_start(req);
         if (req.path == "/api/stream/stop") return handle_stream_stop();
         if (req.path == "/api/demo/run") return handle_demo_run(req);
         if (req.path == "/api/verify/basic") return handle_verify(req, "basic");
@@ -931,6 +932,10 @@ HttpResponse HttpServer::handle_production_reset() {
         stream_l0_before_ = 0;
         stream_l1_before_ = 0;
         stream_l2_before_ = 0;
+        stream_unique_telemetry_ = 0;
+        stream_unique_state_ = 0;
+        stream_successful_delete_targets_ = 0;
+        stream_mode_ = "stream1";
         stream_status_ = "reset";
         stream_workload_file_.clear();
         stream_log_.clear();
@@ -948,23 +953,30 @@ void HttpServer::append_stream_log(const std::string& line) {
     while (stream_log_.size() > 120) stream_log_.pop_front();
 }
 
-void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
+void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const std::string& mode) {
     std::filesystem::create_directories("iot_workloads");
-    const std::string workload_path = "iot_workloads/latest_production_stream.jsonl";
+    const std::string workload_path = (mode == "stream2")
+        ? "iot_workloads/latest_production_stream2.jsonl"
+        : "iot_workloads/latest_production_stream.jsonl";
     std::ofstream workload_file(workload_path, std::ios::trunc);
+    std::vector<std::string> live_telemetry_keys;
+    std::set<std::string> unique_state_keys;
 
     {
         std::lock_guard<std::mutex> guard(stream_mutex_);
         stream_workload_file_ = workload_path;
+        stream_mode_ = mode;
         stream_status_ = "running";
     }
 
-    append_stream_log("stream:start | devices=" + std::to_string(devices) +
+    append_stream_log(mode + ":start | devices=" + std::to_string(devices) +
                       " operations=" + std::to_string(operations));
 
     for (uint64_t i = 0; i < operations && !stream_stop_; ++i) {
-        uint64_t device = i % devices;
         uint64_t op_bucket = i % 100;
+        uint64_t device = (mode == "stream2")
+            ? (((i / 100) * 17 + op_bucket * 13 + 7) % devices)
+            : (i % devices);
         std::string op;
         std::string key;
         std::string value;
@@ -987,16 +999,35 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
                 std::lock_guard<std::mutex> guard(store_mutex_);
                 store_.put(key, value);
             }
+            if (mode == "stream2") live_telemetry_keys.push_back(key);
             {
                 std::lock_guard<std::mutex> guard(stream_mutex_);
                 stream_puts_++;
+                stream_unique_telemetry_++;
             }
         } else if (op_bucket < 90) {
             op = "update";
-            key = "iot:device_" + std::to_string(device) + ":config";
-            value = "{\"device_id\":\"device_" + std::to_string(device) +
-                    "\",\"op\":\"config_update\",\"sampling_ms\":" +
-                    std::to_string(250 + (i % 10) * 50) + "}";
+            if (mode == "stream2") {
+                static const std::array<const char*, 5> families = {
+                    "config:sampling",
+                    "config:threshold",
+                    "status:health",
+                    "status:firmware",
+                    "calibration:vibration"
+                };
+                const std::string family = families[(i / 100 + op_bucket) % families.size()];
+                key = "iot:device_" + std::to_string(device) + ":" + family;
+                value = "{\"device_id\":\"device_" + std::to_string(device) +
+                        "\",\"op\":\"state_update\",\"field\":\"" + family +
+                        "\",\"version\":" + std::to_string(i / 100) +
+                        ",\"value\":" + std::to_string(100 + ((i * 17) % 900)) + "}";
+                unique_state_keys.insert(key);
+            } else {
+                key = "iot:device_" + std::to_string(device) + ":config";
+                value = "{\"device_id\":\"device_" + std::to_string(device) +
+                        "\",\"op\":\"config_update\",\"sampling_ms\":" +
+                        std::to_string(250 + (i % 10) * 50) + "}";
+            }
             {
                 std::lock_guard<std::mutex> guard(store_mutex_);
                 store_.put(key, value);
@@ -1004,11 +1035,25 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
             {
                 std::lock_guard<std::mutex> guard(stream_mutex_);
                 stream_updates_++;
+                if (mode == "stream2") stream_unique_state_ = static_cast<uint64_t>(unique_state_keys.size());
             }
         } else if (op_bucket < 95) {
             op = "delete";
-            uint64_t victim = (i > devices) ? (i - devices) : i;
-            key = "iot:device_" + std::to_string(victim % devices) + ":telemetry:" + std::to_string(victim);
+            bool deleted_existing = false;
+            if (mode == "stream2") {
+                if (!live_telemetry_keys.empty()) {
+                    size_t idx = static_cast<size_t>((i * 1103515245ULL + 12345ULL) % live_telemetry_keys.size());
+                    key = live_telemetry_keys[idx];
+                    live_telemetry_keys[idx] = live_telemetry_keys.back();
+                    live_telemetry_keys.pop_back();
+                    deleted_existing = true;
+                } else {
+                    key = "iot:device_" + std::to_string(device) + ":telemetry:none";
+                }
+            } else {
+                uint64_t victim = (i > devices) ? (i - devices) : i;
+                key = "iot:device_" + std::to_string(victim % devices) + ":telemetry:" + std::to_string(victim);
+            }
             {
                 std::lock_guard<std::mutex> guard(store_mutex_);
                 store_.delete_key(key);
@@ -1016,10 +1061,13 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
             {
                 std::lock_guard<std::mutex> guard(stream_mutex_);
                 stream_deletes_++;
+                if (deleted_existing) stream_successful_delete_targets_++;
             }
         } else {
             op = "get";
-            key = "iot:device_" + std::to_string(device) + ":config";
+            key = (mode == "stream2")
+                ? "iot:device_" + std::to_string(device) + ":status:health"
+                : "iot:device_" + std::to_string(device) + ":config";
             std::string actual;
             {
                 std::lock_guard<std::mutex> guard(store_mutex_);
@@ -1043,7 +1091,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
             if (mismatch) stream_mismatches_++;
         }
 
-        append_stream_log(op + " | key=" + key);
+        append_stream_log(mode + ":" + op + " | key=" + key);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -1051,7 +1099,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices) {
         std::lock_guard<std::mutex> guard(stream_mutex_);
         stream_status_ = stream_stop_ ? "stopped" : "completed";
     }
-    append_stream_log("stream:" + std::string(stream_stop_ ? "stopped" : "completed"));
+    append_stream_log(mode + ":" + std::string(stream_stop_ ? "stopped" : "completed"));
     stream_running_ = false;
 }
 
@@ -1065,6 +1113,8 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
 
     uint64_t operations = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "operations", 10000), 100LL, 500000LL));
     uint64_t devices = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "devices", 100), 1LL, 5000LL));
+    std::string mode = json_get_str(req.body, "mode");
+    if (mode != "stream2") mode = (req.path == "/api/stream2/start") ? "stream2" : "stream1";
 
     if (stream_thread_.joinable()) stream_thread_.join();
 
@@ -1100,6 +1150,10 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
         stream_l0_before_ = l0_before;
         stream_l1_before_ = l1_before;
         stream_l2_before_ = l2_before;
+        stream_unique_telemetry_ = 0;
+        stream_unique_state_ = 0;
+        stream_successful_delete_targets_ = 0;
+        stream_mode_ = mode;
         stream_status_ = "starting";
         stream_workload_file_.clear();
         stream_log_.clear();
@@ -1107,7 +1161,7 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
 
     stream_stop_ = false;
     stream_running_ = true;
-    stream_thread_ = std::thread(&HttpServer::run_stream_worker, this, operations, devices);
+    stream_thread_ = std::thread(&HttpServer::run_stream_worker, this, operations, devices, mode);
 
     HttpResponse resp;
     resp.body = R"({"ok":true,"status":"starting"})";
@@ -1142,6 +1196,10 @@ HttpResponse HttpServer::handle_stream_status() {
     uint64_t l0_before = 0;
     uint64_t l1_before = 0;
     uint64_t l2_before = 0;
+    uint64_t unique_telemetry = 0;
+    uint64_t unique_state = 0;
+    uint64_t successful_delete_targets = 0;
+    std::string mode = "stream1";
 
     {
         std::lock_guard<std::mutex> guard(stream_mutex_);
@@ -1163,6 +1221,10 @@ HttpResponse HttpServer::handle_stream_status() {
         l0_before = stream_l0_before_;
         l1_before = stream_l1_before_;
         l2_before = stream_l2_before_;
+        unique_telemetry = stream_unique_telemetry_;
+        unique_state = stream_unique_state_;
+        successful_delete_targets = stream_successful_delete_targets_;
+        mode = stream_mode_;
     }
 
     uint64_t user_after = 0;
@@ -1195,6 +1257,7 @@ HttpResponse HttpServer::handle_stream_status() {
     j << "{\n";
     j << json_bool("running", running);
     j << json_str("status", status);
+    j << json_str("mode", mode);
     j << json_num("target_operations", target);
     j << json_num("completed_operations", completed);
     j << json_num("devices", devices);
@@ -1203,6 +1266,9 @@ HttpResponse HttpServer::handle_stream_status() {
     j << json_num("deletes", deletes);
     j << json_num("gets", gets);
     j << json_num("mismatches", mismatches);
+    j << json_num("unique_telemetry_keys", unique_telemetry);
+    j << json_num("unique_state_keys", unique_state);
+    j << json_num("successful_delete_targets", successful_delete_targets);
     j << json_num("logical_bytes_delta", user_delta);
     j << json_num("physical_bytes_delta", storage_delta);
     j << json_dbl("write_amplification", write_amp);
