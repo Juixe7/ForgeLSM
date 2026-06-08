@@ -74,6 +74,7 @@ struct HttpResponse {
 //   GET  /api/stream/status → stream counters and recent trace
 //   POST /api/demo/run      → run small-threshold visual LSM demo
 //   POST /api/verify/<name> → isolated correctness verification run
+//   POST /api/experiment/run → run user-authored isolated experiment script
 //
 // All API responses include CORS headers so the dashboard can be
 // loaded from any origin during development.
@@ -113,6 +114,7 @@ private:
     HttpResponse handle_stream_status();
     HttpResponse handle_demo_run(const HttpRequest& req);
     HttpResponse handle_verify(const HttpRequest& req, const std::string& test);
+    HttpResponse handle_experiment_run(const HttpRequest& req);
     void run_stream_worker(uint64_t operations, uint64_t devices, const std::string& mode);
     void append_stream_log(const std::string& line);
 

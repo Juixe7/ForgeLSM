@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ForgeLSM Console</title>
-  <meta name="description" content="Production IoT and verification console for ForgeLSM." />
+  <meta name="description" content="Production IoT and experiment console for ForgeLSM." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -27,8 +27,7 @@
 
   <nav class="view-tabs" aria-label="Console views">
     <button class="tab-btn active" data-view="production-view">Production IoT</button>
-    <button class="tab-btn" data-view="demo-view">Demo Mode</button>
-    <button class="tab-btn" data-view="verification-view">Verification Lab</button>
+    <button class="tab-btn" data-view="experiment-view">Experiment Lab</button>
   </nav>
 
   <main class="console-shell">
@@ -182,149 +181,78 @@
       </div>
     </section>
 
-    <section class="view" id="demo-view">
+    <section class="view" id="experiment-view">
       <div class="audit-shell">
         <section class="audit-panel workload-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Demo Scenario</h1>
-              <p>Runs in <code>flsm_demo_lab</code> with 32 KB memtable and low compaction limits.</p>
+              <h1>Experiment Console</h1>
+              <p>Runs in <code>flsm_experiment_lab</code> with low thresholds and an in-memory reference model.</p>
             </div>
           </div>
-          <div class="control-row">
-            <label>
-              Demo events
-              <select id="demo-events">
-                <option value="120">120 events</option>
-                <option value="240" selected>240 events</option>
-                <option value="500">500 events</option>
-                <option value="1000">1K events</option>
-              </select>
-            </label>
-            <button class="primary-btn" id="demo-run">Run Demo</button>
+          <textarea id="experiment-script" spellcheck="false">insert 1..1000 random
+update 200..500 random
+get 1..1000 random
+delete 300..400 random
+flush
+compact
+recover
+verify
+state</textarea>
+          <div class="control-row experiment-actions">
+            <button class="primary-btn" id="experiment-run">Run Experiment</button>
+            <button class="secondary-btn" id="experiment-basic">Basic Preset</button>
+            <button class="secondary-btn" id="experiment-lsm">LSM Preset</button>
           </div>
           <div class="workload-summary">
-            <div><span>Status</span><strong id="demo-status">Not run</strong></div>
-            <div><span>Final L0</span><strong id="demo-l0">-</strong></div>
-            <div><span>Final L1</span><strong id="demo-l1">-</strong></div>
-            <div><span>Final L2</span><strong id="demo-l2">-</strong></div>
+            <div><span>Status</span><strong id="experiment-status">Not run</strong></div>
+            <div><span>Generated ops</span><strong id="experiment-ops">-</strong></div>
+            <div><span>Checks</span><strong id="experiment-checks">-</strong></div>
+            <div><span>Mismatches</span><strong id="experiment-mismatches">-</strong></div>
           </div>
         </section>
 
         <section class="audit-panel evidence-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Demo Timeline</h1>
-              <p>Shows how tables move through the LSM levels during the demo scenario.</p>
-            </div>
-          </div>
-          <div class="step-list" id="demo-timeline">
-            <div class="empty-state">Run the demo to see level transitions.</div>
-          </div>
-        </section>
-
-        <section class="audit-panel trace-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Demo Trace Console</h1>
-              <p>Latest granular engine trace lines from the demo run.</p>
-            </div>
-          </div>
-          <pre id="demo-trace">{}</pre>
-        </section>
-
-        <section class="audit-panel raw-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Raw Demo JSON</h1>
-              <p>Full demo payload, including thresholds and tombstone checks.</p>
-            </div>
-          </div>
-          <pre id="demo-raw">{}</pre>
-        </section>
-      </div>
-    </section>
-
-    <section class="view" id="verification-view">
-      <div class="audit-shell">
-        <section class="audit-panel workload-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Verification Workload</h1>
-              <p>Runs isolated deterministic IoT workloads in <code>flsm_verify_lab</code>.</p>
-            </div>
-          </div>
-          <div class="control-row">
-            <label>
-              Event count
-              <select id="verify-ops">
-                <option value="1000">1K events</option>
-                <option value="10000" selected>10K events</option>
-                <option value="25000">25K events</option>
-                <option value="50000">50K events</option>
-                <option value="100000">100K events</option>
-              </select>
-            </label>
-            <button class="primary-btn" id="verify-run">Run Full Verification</button>
-          </div>
-          <div class="workload-summary">
-            <div><span>Status</span><strong id="verify-status">Not run</strong></div>
-            <div><span>Recovered keys</span><strong id="verify-recovered">-</strong></div>
-            <div><span>Mismatches</span><strong id="verify-mismatches">-</strong></div>
-            <div><span>Bloom skips</span><strong id="verify-bloom">-</strong></div>
-          </div>
-        </section>
-
-        <section class="audit-panel matrix-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Verification Matrix</h1>
-              <p>Run feature-specific proofs without touching production data.</p>
-            </div>
-          </div>
-          <div class="verification-matrix" id="verification-matrix">
-            <button class="matrix-btn" data-test="basic"><span>Basic Put/Get</span><strong id="matrix-basic">Not run</strong></button>
-            <button class="matrix-btn" data-test="overwrite"><span>Overwrite</span><strong id="matrix-overwrite">Not run</strong></button>
-            <button class="matrix-btn" data-test="delete"><span>Delete/Tombstone</span><strong id="matrix-delete">Not run</strong></button>
-            <button class="matrix-btn" data-test="flush"><span>Flush/SSTable</span><strong id="matrix-flush">Not run</strong></button>
-            <button class="matrix-btn" data-test="bloom"><span>Bloom Filter</span><strong id="matrix-bloom">Not run</strong></button>
-            <button class="matrix-btn" data-test="compaction"><span>Compaction</span><strong id="matrix-compaction">Not run</strong></button>
-            <button class="matrix-btn" data-test="recovery"><span>Recovery</span><strong id="matrix-recovery">Not run</strong></button>
-            <button class="matrix-btn partial" data-test="gc"><span>VLog GC</span><strong id="matrix-gc">Partial</strong></button>
-          </div>
-        </section>
-
-        <section class="audit-panel evidence-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Verification Evidence</h1>
-              <p>Selected verification result with exact counts and structural transitions.</p>
+              <h1>Experiment State</h1>
+              <p>Final storage state after the command script completed.</p>
             </div>
           </div>
           <table class="audit-table evidence-table">
             <tbody>
-              <tr><th>Test</th><td id="ev-test">-</td></tr>
-              <tr><th>Requested events</th><td id="ev-requested">-</td></tr>
-              <tr><th>Model live keys</th><td id="ev-model">-</td></tr>
-              <tr><th>L0 flush transition</th><td id="ev-flush">-</td></tr>
-              <tr><th>Compaction transition</th><td id="ev-compaction">-</td></tr>
-              <tr><th>Deleted keys checked</th><td id="ev-deletes">-</td></tr>
-              <tr><th>VLog GC bytes</th><td id="ev-gc">-</td></tr>
+              <tr><th>Model live keys</th><td id="experiment-model">-</td></tr>
+              <tr><th>Deleted keys tracked</th><td id="experiment-deleted">-</td></tr>
+              <tr><th>Memtable entries</th><td id="experiment-mem">-</td></tr>
+              <tr><th>L0/L1/L2</th><td id="experiment-levels">-</td></tr>
+              <tr><th>WAL/SST/VLog bytes</th><td id="experiment-files">-</td></tr>
+              <tr><th>Total disk bytes</th><td id="experiment-disk">-</td></tr>
+              <tr><th>Space amplification</th><td id="experiment-space">-</td></tr>
+              <tr><th>Write amplification</th><td id="experiment-writeamp">-</td></tr>
             </tbody>
           </table>
-          <div class="step-list" id="verify-steps">
-            <div class="empty-state">Run a verification test to see proof steps.</div>
+        </section>
+
+        <section class="audit-panel evidence-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Execution Log</h1>
+              <p>Each console command is shown with its result and verification status.</p>
+            </div>
+          </div>
+          <div class="step-list" id="experiment-steps">
+            <div class="empty-state">Run an experiment to see command-by-command evidence.</div>
           </div>
         </section>
 
         <section class="audit-panel raw-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Raw Verification JSON</h1>
-              <p>Raw API payload from the most recent verification run.</p>
+              <h1>Raw Experiment JSON</h1>
+              <p>Full API payload from the most recent experiment run.</p>
             </div>
           </div>
-          <pre id="verify-raw">{}</pre>
+          <pre id="experiment-raw">{}</pre>
         </section>
       </div>
     </section>

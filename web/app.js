@@ -14,15 +14,12 @@ const els = {
   streamMode: document.getElementById('stream-mode'),
   streamOps: document.getElementById('stream-ops'),
   streamDevices: document.getElementById('stream-devices'),
-  demoRun: document.getElementById('demo-run'),
-  demoEvents: document.getElementById('demo-events'),
-  demoRaw: document.getElementById('demo-raw'),
-  demoTrace: document.getElementById('demo-trace'),
-  demoTimeline: document.getElementById('demo-timeline'),
-  verifyRun: document.getElementById('verify-run'),
-  verifyOps: document.getElementById('verify-ops'),
-  matrix: document.getElementById('verification-matrix'),
-  verifyRaw: document.getElementById('verify-raw'),
+  experimentRun: document.getElementById('experiment-run'),
+  experimentBasic: document.getElementById('experiment-basic'),
+  experimentLsm: document.getElementById('experiment-lsm'),
+  experimentScript: document.getElementById('experiment-script'),
+  experimentSteps: document.getElementById('experiment-steps'),
+  experimentRaw: document.getElementById('experiment-raw'),
 };
 
 function byId(id) {
@@ -262,84 +259,28 @@ async function resetProductionStore() {
   }
 }
 
-function setMatrixCell(test, status) {
-  const cell = byId(`matrix-${test}`);
-  if (!cell) return;
-  cell.textContent = status === 'pass' ? 'PASS' : status === 'fail' ? 'FAIL' : 'RUNNING';
-  cell.className = statusClass(status);
-}
-
-function renderDemoTimeline(timeline) {
-  const rows = Array.isArray(timeline) ? timeline : [];
-  els.demoTimeline.innerHTML = rows.length
-    ? rows.map((entry) => `
-        <div class="step-row pass">
-          <div class="step-status">LSM</div>
-          <div>
-            <div class="step-name">${escapeHtml(entry.phase || 'demo step')}</div>
-            <div class="step-detail">mem=${fmtNum(entry.memtable_entries)} | L0=${fmtNum(entry.l0)} | L1=${fmtNum(entry.l1)} | L2=${fmtNum(entry.l2)}</div>
-          </div>
-        </div>
-      `).join('')
-    : '<div class="empty-state">No timeline returned.</div>';
-}
-
-function setDemoBusy(isBusy) {
-  els.demoRun.disabled = isBusy;
-  els.demoRun.textContent = isBusy ? 'Running...' : 'Run Demo';
-}
-
-async function runDemo() {
-  const events = parseInt(els.demoEvents.value, 10);
-  setDemoBusy(true);
-  setText('demo-status', 'RUNNING');
-  byId('demo-status').className = 'pending';
-  try {
-    const result = await postJson('/api/demo/run', {events});
-    setText('demo-status', String(result.status || 'fail').toUpperCase());
-    byId('demo-status').className = statusClass(result.status);
-    setText('demo-l0', fmtNum(result.final_l0));
-    setText('demo-l1', fmtNum(result.final_l1));
-    setText('demo-l2', fmtNum(result.final_l2));
-    renderDemoTimeline(result.timeline);
-    els.demoTrace.textContent = Array.isArray(result.trace) ? result.trace.join('\n') : '';
-    els.demoRaw.textContent = JSON.stringify(result, null, 2);
-  } catch (err) {
-    setText('demo-status', 'FAIL');
-    byId('demo-status').className = 'fail';
-    els.demoRaw.textContent = JSON.stringify({error: err.message}, null, 2);
-    els.demoTrace.textContent = err.message;
-  } finally {
-    setDemoBusy(false);
-  }
-}
-
-function renderVerification(result) {
+function renderExperiment(result) {
   const status = result.status || 'fail';
-  const mismatches = Array.isArray(result.mismatches) ? result.mismatches.length : 0;
+  const mismatches = Number(result.mismatches || 0);
 
-  setText('verify-status', status.toUpperCase());
-  byId('verify-status').className = statusClass(status);
-  setText('verify-recovered', fmtNum(result.post_recovery_checked || 0));
-  setText('verify-mismatches', fmtNum(mismatches));
-  byId('verify-mismatches').className = mismatches === 0 ? 'pass' : 'fail';
-  setText('verify-bloom', fmtNum(result.bloom_skips || 0));
+  setText('experiment-status', status.toUpperCase());
+  byId('experiment-status').className = statusClass(status);
+  setText('experiment-ops', fmtNum(result.generated_ops || 0));
+  setText('experiment-checks', fmtNum(result.verify_checks || 0));
+  setText('experiment-mismatches', fmtNum(mismatches));
+  byId('experiment-mismatches').className = mismatches === 0 ? 'pass' : 'fail';
 
-  setText('ev-test', result.test || '-');
-  setText('ev-requested', fmtNum(result.requested_events || 0));
-  setText('ev-model', fmtNum(result.model_live_keys || 0));
-  setText('ev-flush', `L0 ${result.l0_before_flush || 0} -> ${result.l0_after_flush || 0}`);
-  setText('ev-compaction', `L0 ${result.l0_before_compaction || 0} -> ${result.l0_after_compaction || 0}; L1 ${result.l1_before_compaction || 0} -> ${result.l1_after_compaction || 0}`);
-  setText('ev-deletes', `${fmtNum(result.deleted_checked || 0)} checked, ${fmtNum(result.deleted_found || 0)} found`);
-  setText('ev-gc', `${fmtBytes(result.vlog_before_gc || 0)} -> ${fmtBytes(result.vlog_after_gc || 0)}`);
-
-  if (result.test) setMatrixCell(result.test, status);
-  if (result.test === 'full') {
-    ['basic', 'overwrite', 'delete', 'flush', 'bloom', 'compaction', 'recovery'].forEach((test) => setMatrixCell(test, status));
-  }
+  setText('experiment-model', fmtNum(result.model_live_keys || 0));
+  setText('experiment-deleted', fmtNum(result.model_deleted_keys || 0));
+  setText('experiment-mem', `${fmtNum(result.memtable_entries || 0)} entries, ${fmtBytes(result.memtable_bytes || 0)} / ${fmtBytes(result.flush_threshold || 0)}`);
+  setText('experiment-levels', `L0 ${fmtNum(result.l0_count || 0)} / L1 ${fmtNum(result.l1_count || 0)} / L2 ${fmtNum(result.l2_count || 0)}`);
+  setText('experiment-files', `WAL ${fmtBytes(result.wal_bytes || 0)}, SST ${fmtBytes(result.sst_bytes || 0)}, VLog ${fmtBytes(result.vlog_bytes || 0)}`);
+  setText('experiment-disk', fmtBytes(result.total_disk_bytes || 0));
+  setText('experiment-space', fmtAmp(result.space_amplification_estimate || 0));
+  setText('experiment-writeamp', fmtAmp(result.write_amplification || 0));
 
   const steps = Array.isArray(result.steps) ? result.steps : [];
-  byId('verify-steps').innerHTML = steps.length
+  els.experimentSteps.innerHTML = steps.length
     ? steps.map((step) => `
         <div class="step-row ${statusClass(step.status)}">
           <div class="step-status">${String(step.status || 'fail').toUpperCase()}</div>
@@ -349,38 +290,61 @@ function renderVerification(result) {
           </div>
         </div>
       `).join('')
-    : '<div class="empty-state">No proof steps were returned.</div>';
+    : '<div class="empty-state">No experiment steps were returned.</div>';
 
-  els.verifyRaw.textContent = JSON.stringify(result, null, 2);
+  els.experimentRaw.textContent = JSON.stringify(result, null, 2);
 }
 
-function setVerificationBusy(isBusy, label) {
-  els.verifyRun.disabled = isBusy;
-  document.querySelectorAll('.matrix-btn').forEach((btn) => {
-    btn.disabled = isBusy;
-  });
-  els.verifyRun.textContent = isBusy ? `Running ${label}...` : 'Run Full Verification';
+function setExperimentBusy(isBusy) {
+  els.experimentRun.disabled = isBusy;
+  els.experimentBasic.disabled = isBusy;
+  els.experimentLsm.disabled = isBusy;
+  els.experimentRun.textContent = isBusy ? 'Running...' : 'Run Experiment';
 }
 
-async function runVerification(test) {
-  const ops = parseInt(els.verifyOps.value, 10);
-  setVerificationBusy(true, test);
-  setMatrixCell(test === 'full' ? 'basic' : test, 'running');
+async function runExperiment() {
+  setExperimentBusy(true);
+  setText('experiment-status', 'RUNNING');
+  byId('experiment-status').className = 'pending';
   try {
-    const result = await postJson(`/api/verify/${test}`, {ops});
-    renderVerification(result);
-    await refreshState(false);
+    const result = await postJson('/api/experiment/run', {script: els.experimentScript.value});
+    renderExperiment(result);
   } catch (err) {
-    renderVerification({
-      test,
+    renderExperiment({
       status: 'fail',
-      requested_events: ops,
-      mismatches: [err.message],
-      steps: [{name: 'Verification request', status: 'fail', detail: err.message}],
+      mismatches: 1,
+      steps: [{name: 'Experiment request', status: 'fail', detail: err.message}],
     });
   } finally {
-    setVerificationBusy(false, test);
+    setExperimentBusy(false);
   }
+}
+
+function setExperimentPreset(kind) {
+  if (kind === 'basic') {
+    els.experimentScript.value = [
+      'put manual:key hello',
+      'get manual:key',
+      'update manual:key hello_v2',
+      'get manual:key',
+      'delete manual:key',
+      'get manual:key',
+      'verify',
+    ].join('\n');
+    return;
+  }
+  els.experimentScript.value = [
+    'insert 1..2000 random',
+    'update 500..1200 random',
+    'delete 700..900 random',
+    'flush',
+    'insert 2001..4000 random',
+    'flush',
+    'compact',
+    'recover',
+    'verify',
+    'state',
+  ].join('\n');
 }
 
 document.querySelectorAll('.tab-btn').forEach((button) => {
@@ -396,13 +360,9 @@ els.refreshState.addEventListener('click', () => refreshState(true));
 els.resetProduction.addEventListener('click', resetProductionStore);
 els.streamStart.addEventListener('click', startStream);
 els.streamStop.addEventListener('click', stopStream);
-els.demoRun.addEventListener('click', runDemo);
-els.verifyRun.addEventListener('click', () => runVerification('full'));
-els.matrix.addEventListener('click', (event) => {
-  const button = event.target.closest('.matrix-btn');
-  if (!button) return;
-  runVerification(button.dataset.test);
-});
+els.experimentRun.addEventListener('click', runExperiment);
+els.experimentBasic.addEventListener('click', () => setExperimentPreset('basic'));
+els.experimentLsm.addEventListener('click', () => setExperimentPreset('lsm'));
 
 refreshState();
 refreshStreamStatus();

@@ -166,7 +166,6 @@ pre {
 }
 
 .system-panel,
-.matrix-panel,
 .internals-panel,
 .limitations-panel {
   grid-column: span 1;
@@ -256,8 +255,7 @@ p {
 select,
 .primary-btn,
 .secondary-btn,
-.danger-btn,
-.matrix-btn {
+.danger-btn {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-2);
@@ -302,6 +300,30 @@ select {
   justify-content: flex-end;
 }
 
+#experiment-script {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #070a0e;
+  color: #d7e1eb;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  outline: none;
+}
+
+#experiment-script:focus {
+  border-color: var(--blue);
+}
+
+.experiment-actions {
+  align-items: center;
+}
+
 button:disabled {
   opacity: 0.65;
   cursor: wait;
@@ -331,37 +353,6 @@ button:disabled {
 .workload-summary strong {
   font-family: var(--mono);
   font-size: 16px;
-}
-
-.verification-matrix {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.matrix-btn {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  min-height: 48px;
-  padding: 10px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.matrix-btn:hover {
-  border-color: var(--blue);
-}
-
-.matrix-btn span {
-  font-size: 12px;
-}
-
-.matrix-btn strong {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--faint);
 }
 
 .pass {
@@ -403,6 +394,12 @@ button:disabled {
   padding-right: 4px;
 }
 
+#experiment-steps {
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .step-row {
   display: grid;
   grid-template-columns: 70px 1fr;
@@ -439,10 +436,8 @@ button:disabled {
   font-size: 12px;
 }
 
-#verify-raw,
 #prod-raw,
-#demo-raw,
-#demo-trace {
+#experiment-raw {
   min-height: 360px;
   max-height: 560px;
   overflow: auto;
@@ -454,10 +449,6 @@ button:disabled {
   color: #c8d3df;
   font-size: 12px;
   white-space: pre-wrap;
-}
-
-#demo-trace {
-  min-height: 280px;
 }
 
 .status-chip {
@@ -477,7 +468,6 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .verification-matrix,
   .workload-summary,
   .internals-grid {
     grid-template-columns: 1fr 1fr;
@@ -510,7 +500,6 @@ button:disabled {
     flex-direction: column;
   }
 
-  .verification-matrix,
   .workload-summary,
   .internals-grid {
     grid-template-columns: 1fr;

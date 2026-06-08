@@ -1,6 +1,7 @@
 #include "http_server.h"
 #include "benchmark.h"
 #include "verification.h"
+#include "experiment_lab.h"
 
 #include <algorithm>
 #include <array>
@@ -298,6 +299,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/stream2/start") return handle_stream_start(req);
         if (req.path == "/api/stream/stop") return handle_stream_stop();
         if (req.path == "/api/demo/run") return handle_demo_run(req);
+        if (req.path == "/api/experiment/run") return handle_experiment_run(req);
         if (req.path == "/api/verify/basic") return handle_verify(req, "basic");
         if (req.path == "/api/verify/overwrite") return handle_verify(req, "overwrite");
         if (req.path == "/api/verify/delete") return handle_verify(req, "delete");
@@ -1437,6 +1439,15 @@ HttpResponse HttpServer::handle_verify(const HttpRequest& req, const std::string
 
     HttpResponse resp;
     resp.body = run_verification(options);
+    return resp;
+}
+
+HttpResponse HttpServer::handle_experiment_run(const HttpRequest& req) {
+    ExperimentOptions options;
+    options.script = json_get_str(req.body, "script");
+
+    HttpResponse resp;
+    resp.body = run_experiment_lab(options);
     return resp;
 }
 // ─────────────────────────────────────────────────────────────────

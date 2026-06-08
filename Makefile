@@ -1,6 +1,6 @@
 CXX      = g++
 CXXFLAGS = -std=c++20 -Wall -Wextra -Iinclude
-SRCS     = src/crc32.cpp src/wal.cpp src/vlog.cpp src/sstable.cpp src/memtable.cpp src/manifest.cpp src/compaction.cpp src/vlog_gc.cpp src/bloom.cpp src/benchmark.cpp src/cli.cpp src/kvstore.cpp src/verification.cpp src/http_server.cpp main.cpp
+SRCS     = src/crc32.cpp src/wal.cpp src/vlog.cpp src/sstable.cpp src/memtable.cpp src/manifest.cpp src/compaction.cpp src/vlog_gc.cpp src/bloom.cpp src/benchmark.cpp src/cli.cpp src/kvstore.cpp src/verification.cpp src/experiment_lab.cpp src/http_server.cpp main.cpp
 TARGET   = flsm
 
 ifeq ($(OS),Windows_NT)
