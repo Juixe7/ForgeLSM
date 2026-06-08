@@ -52,16 +52,7 @@ void run_compaction(KVStore* store) {
         }
     }
 
-    // 3. Collect keys from input L1 files (for safe tombstone eviction).
-    std::set<std::string> l1_keys;
-    for (uint32_t seq : l1_inputs) {
-        auto r = get_l1_reader(seq);
-        for (const auto& e : r->entries()) {
-            l1_keys.insert(e.key);
-        }
-    }
-
-    // 4. K-Way merge (Duplicate Resolution: newest version wins).
+    // 3. K-Way merge (Duplicate Resolution: newest version wins).
     // COMPACTION ORDERING (STRICT PRIORITY):
     // std::map::insert ignores duplicates. By inserting sources in strictly newest-to-oldest order
     // (Newest L0 -> Oldest L0 -> L1), we naturally guarantee that only the newest sequence 
@@ -87,19 +78,11 @@ void run_compaction(KVStore* store) {
         }
     }
 
-    // 5. Filter tombstones according to safety rules.
-    for (auto it = merged.begin(); it != merged.end(); ) {
-        if (is_tombstone(it->second)) {
-            // ONLY drop tombstone if key does NOT exist in input L1 files.
-            if (l1_keys.find(it->first) == l1_keys.end()) {
-                it = merged.erase(it);
-                continue;
-            }
-        }
-        ++it;
-    }
+    // Tombstones must be preserved when compacting into L1. Older values may
+    // already live in L2, so dropping a tombstone here can resurrect deleted
+    // keys after restart or after read path reaches colder levels.
 
-    // 6. Write new L1 SSTables (chunked by threshold).
+    // 4. Write new L1 SSTables (chunked by threshold).
     std::vector<uint32_t> new_l1_seqs;
     std::map<std::string, VLogPointer> chunk;
     size_t chunk_size = 0;
@@ -131,7 +114,7 @@ void run_compaction(KVStore* store) {
     }
     flush_chunk();
 
-    // 7. Atomic Manifest Update (Visibility strictly tied to commit).
+    // 5. Atomic Manifest Update (Visibility strictly tied to commit).
     manifest.version++;
     manifest.l0_seqs.clear(); // all L0 compacted
     manifest.l1_seqs = l1_retained;
@@ -145,12 +128,12 @@ void run_compaction(KVStore* store) {
               << l1_inputs.size() << " L1 files into " 
               << new_l1_seqs.size() << " new L1 files.\n";
 
-    // 8. Safely delete old compacted files from disk.
+    // 6. Safely delete old compacted files from disk.
     std::error_code ec;
     for (uint32_t seq : l0_inputs) std::filesystem::remove(store->sst_path(seq), ec);
     for (uint32_t seq : l1_inputs) std::filesystem::remove(store->sst_path(seq), ec);
 
-    // 9. Reload state so read path sees the new manifest state correctly.
+    // 7. Reload state so read path sees the new manifest state correctly.
     store->load_sstables();
 }
 
