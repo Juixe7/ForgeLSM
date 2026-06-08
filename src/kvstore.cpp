@@ -439,6 +439,39 @@ bool KVStore::wal_tainted() const {
     return wal_ && wal_->is_tainted();
 }
 
+StorageSummary KVStore::storage_summary() const {
+    std::map<std::string, VLogPointer> newest;
+
+    auto add_entries = [&](const std::map<std::string, VLogPointer>& entries) {
+        for (const auto& [key, ptr] : entries) {
+            newest.insert({key, ptr});
+        }
+    };
+    auto add_sstable = [&](const SSTableReader& sst) {
+        for (const auto& entry : sst.entries()) {
+            newest.insert({entry.key, entry.pointer});
+        }
+    };
+
+    if (active_) add_entries(active_->entries());
+    if (immutable_) add_entries(immutable_->entries());
+
+    for (const auto& sst : l0_sstables_) add_sstable(sst);
+    for (const auto& sst : l1_sstables_) add_sstable(sst);
+    for (const auto& sst : l2_sstables_) add_sstable(sst);
+
+    StorageSummary summary;
+    for (const auto& [key, ptr] : newest) {
+        if (is_tombstone(ptr)) {
+            summary.tombstones++;
+            continue;
+        }
+        summary.live_keys++;
+        summary.live_logical_bytes += static_cast<uint64_t>(key.size()) + ptr.length;
+    }
+    return summary;
+}
+
 void KVStore::trace_event(const std::string& event, const std::string& detail) const {
     if (!options_.trace_enabled) return;
     std::ofstream out(options_.trace_path, std::ios::app);

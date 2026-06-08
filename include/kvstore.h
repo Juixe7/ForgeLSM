@@ -8,6 +8,7 @@
 #include "manifest.h"
 
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -44,6 +45,12 @@ struct KVStoreOptions {
     size_t l1_hard_limit = 12;
     bool trace_enabled = false;
     std::string trace_path;
+};
+
+struct StorageSummary {
+    uint64_t live_keys = 0;
+    uint64_t tombstones = 0;
+    uint64_t live_logical_bytes = 0;
 };
 
 // KVStore — engine core (Phase 2).
@@ -88,6 +95,7 @@ public:
     size_t flush_threshold_bytes() const { return options_.flush_threshold; }
     size_t l0_hard_limit()       const { return options_.l0_hard_limit; }
     size_t l1_hard_limit()       const { return options_.l1_hard_limit; }
+    StorageSummary storage_summary() const;
 
     // Verification/admin hooks used by the local dashboard. These keep the
     // public app surface small while allowing the UI to prove storage behavior.

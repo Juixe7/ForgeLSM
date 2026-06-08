@@ -342,6 +342,7 @@ HttpResponse HttpServer::handle_static(const std::string& rel_path) {
 HttpResponse HttpServer::handle_metrics() {
     std::lock_guard<std::mutex> guard(store_mutex_);
     const auto& m = store_.metrics();
+    auto summary = store_.storage_summary();
 
     double write_amp = (m.user_bytes_written > 0)
         ? static_cast<double>(m.storage_bytes_written) /
@@ -361,7 +362,12 @@ HttpResponse HttpServer::handle_metrics() {
     std::ostringstream j;
     j << "{\n";
     j << json_num ("user_bytes_written",    m.user_bytes_written);
+    j << json_num ("session_user_bytes_written", m.user_bytes_written);
     j << json_num ("storage_bytes_written", m.storage_bytes_written);
+    j << json_num ("session_storage_bytes_written", m.storage_bytes_written);
+    j << json_num ("live_keys_estimate",    summary.live_keys);
+    j << json_num ("live_logical_bytes_estimate", summary.live_logical_bytes);
+    j << json_num ("tombstones_estimate",   summary.tombstones);
     j << json_num ("get_calls",             m.get_calls);
     j << json_num ("sst_considered",        m.sst_considered);
     j << json_num ("bloom_skips",           m.bloom_skips);
@@ -427,6 +433,7 @@ HttpResponse HttpServer::handle_lsm_state() {
 HttpResponse HttpServer::handle_debug_state() {
     std::lock_guard<std::mutex> guard(store_mutex_);
     const auto& m = store_.metrics();
+    auto summary = store_.storage_summary();
 
     uint64_t wal_files = 0;
     uint64_t wal_bytes = 0;
@@ -455,6 +462,11 @@ HttpResponse HttpServer::handle_debug_state() {
         }
     }
 
+    uint64_t total_disk_bytes = wal_bytes + sst_bytes + vlog_bytes;
+    double space_amp = (summary.live_logical_bytes > 0)
+        ? static_cast<double>(total_disk_bytes) / static_cast<double>(summary.live_logical_bytes)
+        : 0.0;
+
     std::ostringstream j;
     j << "{\n";
     j << json_num ("memtable_entries",    static_cast<uint64_t>(store_.memtable_entries()));
@@ -469,7 +481,13 @@ HttpResponse HttpServer::handle_debug_state() {
     j << json_num ("sst_files",           sst_files);
     j << json_num ("sst_bytes",           sst_bytes);
     j << json_num ("vlog_bytes",          vlog_bytes);
+    j << json_num ("total_disk_bytes",    total_disk_bytes);
+    j << json_num ("live_keys_estimate",  summary.live_keys);
+    j << json_num ("live_logical_bytes_estimate", summary.live_logical_bytes);
+    j << json_num ("tombstones_estimate", summary.tombstones);
+    j << json_dbl ("space_amplification_estimate", space_amp);
     j << json_num ("user_bytes_written",  m.user_bytes_written);
+    j << json_num ("session_user_bytes_written", m.user_bytes_written);
     j << json_num ("storage_bytes_written", m.storage_bytes_written, true);
     j << "}";
 
