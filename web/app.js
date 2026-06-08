@@ -92,8 +92,12 @@ function renderSystem(metrics, lsm, debug) {
   setText('state-l1', `${fmtNum(lsm.l1_count)} files`);
   setText('state-l2', `${fmtNum(lsm.l2_count)} files`);
   setText('state-wal', debug.wal_tainted ? 'TAINTED' : `Clean, ${fmtNum(debug.wal_files)} file(s), ${fmtBytes(debug.wal_bytes)}`);
-  setText('state-session-user', fmtBytes(metrics.session_user_bytes_written ?? metrics.user_bytes_written));
-  setText('state-session-storage', fmtBytes(metrics.session_storage_bytes_written ?? metrics.storage_bytes_written));
+  setText('state-total-user', fmtBytes(metrics.total_user_bytes_written ?? metrics.user_bytes_written));
+  setText('state-total-storage', fmtBytes(metrics.total_storage_bytes_written ?? metrics.storage_bytes_written));
+  setText('state-total-ops', `${fmtNum(metrics.total_put_calls || 0)} puts, ${fmtNum(metrics.total_delete_calls || 0)} deletes`);
+  setText('state-session-user', fmtBytes(metrics.session_user_bytes_written || 0));
+  setText('state-session-storage', fmtBytes(metrics.session_storage_bytes_written || 0));
+  setText('state-session-ops', `${fmtNum(metrics.session_put_calls || 0)} puts, ${fmtNum(metrics.session_delete_calls || 0)} deletes`);
   setText('state-total-disk', fmtBytes(debug.total_disk_bytes));
   setText('state-live-logical', `${fmtBytes(debug.live_logical_bytes_estimate)} across ${fmtNum(debug.live_keys_estimate)} live keys`);
   setText('state-space-amp', `${Number(debug.space_amplification_estimate || 0).toFixed(2)}x`);

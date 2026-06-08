@@ -341,38 +341,45 @@ HttpResponse HttpServer::handle_static(const std::string& rel_path) {
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_metrics() {
     std::lock_guard<std::mutex> guard(store_mutex_);
-    const auto& m = store_.metrics();
+    const auto& session = store_.metrics();
+    const auto& total = store_.durable_metrics();
     auto summary = store_.storage_summary();
 
-    double write_amp = (m.user_bytes_written > 0)
-        ? static_cast<double>(m.storage_bytes_written) /
-          static_cast<double>(m.user_bytes_written)
+    double write_amp = (total.user_bytes_written > 0)
+        ? static_cast<double>(total.storage_bytes_written) /
+          static_cast<double>(total.user_bytes_written)
         : 0.0;
 
-    double read_amp = (m.get_calls > 0)
-        ? static_cast<double>(m.sst_searches + m.vlog_reads) /
-          static_cast<double>(m.get_calls)
+    double read_amp = (session.get_calls > 0)
+        ? static_cast<double>(session.sst_searches + session.vlog_reads) /
+          static_cast<double>(session.get_calls)
         : 0.0;
 
-    double bloom_eff = (m.sst_considered > 0)
-        ? static_cast<double>(m.bloom_skips) /
-          static_cast<double>(m.sst_considered) * 100.0
+    double bloom_eff = (session.sst_considered > 0)
+        ? static_cast<double>(session.bloom_skips) /
+          static_cast<double>(session.sst_considered) * 100.0
         : 0.0;
 
     std::ostringstream j;
     j << "{\n";
-    j << json_num ("user_bytes_written",    m.user_bytes_written);
-    j << json_num ("session_user_bytes_written", m.user_bytes_written);
-    j << json_num ("storage_bytes_written", m.storage_bytes_written);
-    j << json_num ("session_storage_bytes_written", m.storage_bytes_written);
+    j << json_num ("user_bytes_written",    total.user_bytes_written);
+    j << json_num ("total_user_bytes_written", total.user_bytes_written);
+    j << json_num ("session_user_bytes_written", session.user_bytes_written);
+    j << json_num ("storage_bytes_written", total.storage_bytes_written);
+    j << json_num ("total_storage_bytes_written", total.storage_bytes_written);
+    j << json_num ("session_storage_bytes_written", session.storage_bytes_written);
+    j << json_num ("total_put_calls",       total.put_calls);
+    j << json_num ("session_put_calls",     session.put_calls);
+    j << json_num ("total_delete_calls",    total.delete_calls);
+    j << json_num ("session_delete_calls",  session.delete_calls);
     j << json_num ("live_keys_estimate",    summary.live_keys);
     j << json_num ("live_logical_bytes_estimate", summary.live_logical_bytes);
     j << json_num ("tombstones_estimate",   summary.tombstones);
-    j << json_num ("get_calls",             m.get_calls);
-    j << json_num ("sst_considered",        m.sst_considered);
-    j << json_num ("bloom_skips",           m.bloom_skips);
-    j << json_num ("sst_searches",          m.sst_searches);
-    j << json_num ("vlog_reads",            m.vlog_reads);
+    j << json_num ("get_calls",             session.get_calls);
+    j << json_num ("sst_considered",        session.sst_considered);
+    j << json_num ("bloom_skips",           session.bloom_skips);
+    j << json_num ("sst_searches",          session.sst_searches);
+    j << json_num ("vlog_reads",            session.vlog_reads);
     j << json_dbl ("write_amplification",   write_amp);
     j << json_dbl ("read_amplification",    read_amp);
     j << json_dbl ("bloom_effectiveness",   bloom_eff, true);
@@ -432,7 +439,8 @@ HttpResponse HttpServer::handle_lsm_state() {
 // ─────────────────────────────────────────────────────────────────
 HttpResponse HttpServer::handle_debug_state() {
     std::lock_guard<std::mutex> guard(store_mutex_);
-    const auto& m = store_.metrics();
+    const auto& session = store_.metrics();
+    const auto& total = store_.durable_metrics();
     auto summary = store_.storage_summary();
 
     uint64_t wal_files = 0;
@@ -486,9 +494,16 @@ HttpResponse HttpServer::handle_debug_state() {
     j << json_num ("live_logical_bytes_estimate", summary.live_logical_bytes);
     j << json_num ("tombstones_estimate", summary.tombstones);
     j << json_dbl ("space_amplification_estimate", space_amp);
-    j << json_num ("user_bytes_written",  m.user_bytes_written);
-    j << json_num ("session_user_bytes_written", m.user_bytes_written);
-    j << json_num ("storage_bytes_written", m.storage_bytes_written, true);
+    j << json_num ("user_bytes_written",  total.user_bytes_written);
+    j << json_num ("total_user_bytes_written", total.user_bytes_written);
+    j << json_num ("session_user_bytes_written", session.user_bytes_written);
+    j << json_num ("storage_bytes_written", total.storage_bytes_written);
+    j << json_num ("total_storage_bytes_written", total.storage_bytes_written);
+    j << json_num ("session_storage_bytes_written", session.storage_bytes_written);
+    j << json_num ("total_put_calls", total.put_calls);
+    j << json_num ("session_put_calls", session.put_calls);
+    j << json_num ("total_delete_calls", total.delete_calls);
+    j << json_num ("session_delete_calls", session.delete_calls, true);
     j << "}";
 
     HttpResponse resp;
@@ -704,27 +719,30 @@ HttpResponse HttpServer::handle_bench(const HttpRequest& req) {
     if (ops < 50)   ops = 50;
     if (ops > 2000) ops = 2000;
 
-    std::lock_guard<std::mutex> guard(store_mutex_);
-    store_.metrics().reset();
+    const std::string bench_dir = "flsm_bench_lab_http";
+    std::error_code ec;
+    std::filesystem::remove_all(bench_dir, ec);
+    KVStore bench_store(bench_dir);
+    bench_store.metrics().reset();
     auto t0 = std::chrono::high_resolution_clock::now();
 
     std::string dummy_val(100, 'x');
     for (int i = 0; i < ops; ++i) {
         if (type == "random_write") {
-            store_.put("key_" + std::to_string(rand() % ops), dummy_val);
+            bench_store.put("key_" + std::to_string(rand() % ops), dummy_val);
         } else if (type == "sequential_write") {
             char buf[32];
             snprintf(buf, sizeof(buf), "seq_%08d", i);
-            store_.put(buf, dummy_val);
+            bench_store.put(buf, dummy_val);
         } else if (type == "random_read") {
             std::string val;
-            store_.get("key_" + std::to_string(rand() % ops), val);
+            bench_store.get("key_" + std::to_string(rand() % ops), val);
         } else if (type == "mixed") {
             if (rand() % 100 < 70) {
                 std::string val;
-                store_.get("key_" + std::to_string(rand() % ops), val);
+                bench_store.get("key_" + std::to_string(rand() % ops), val);
             } else {
-                store_.put("key_" + std::to_string(rand() % ops), dummy_val);
+                bench_store.put("key_" + std::to_string(rand() % ops), dummy_val);
             }
         }
     }
@@ -733,7 +751,7 @@ HttpResponse HttpServer::handle_bench(const HttpRequest& req) {
 
     double elapsed_s = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() / 1000.0;
     double throughput = (elapsed_s > 0) ? ops / elapsed_s : 0.0;
-    const auto& m = store_.metrics();
+    const auto& m = bench_store.metrics();
     double write_amp = (m.user_bytes_written > 0)
         ? static_cast<double>(m.storage_bytes_written) / static_cast<double>(m.user_bytes_written)
         : 0.0;
@@ -778,8 +796,8 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     const uint64_t l0_before = static_cast<uint64_t>(store_.l0_count());
     const uint64_t l1_before = static_cast<uint64_t>(store_.l1_count());
     const uint64_t mem_before = static_cast<uint64_t>(store_.memtable_entries());
-    const uint64_t user_before = store_.metrics().user_bytes_written;
-    const uint64_t storage_before = store_.metrics().storage_bytes_written;
+    const uint64_t user_before = store_.durable_metrics().user_bytes_written;
+    const uint64_t storage_before = store_.durable_metrics().storage_bytes_written;
 
     auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<std::string> sample_keys;
@@ -847,8 +865,8 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     const uint64_t l0_after = static_cast<uint64_t>(store_.l0_count());
     const uint64_t l1_after = static_cast<uint64_t>(store_.l1_count());
     const uint64_t mem_after = static_cast<uint64_t>(store_.memtable_entries());
-    const uint64_t user_delta = store_.metrics().user_bytes_written - user_before;
-    const uint64_t storage_delta = store_.metrics().storage_bytes_written - storage_before;
+    const uint64_t user_delta = store_.durable_metrics().user_bytes_written - user_before;
+    const uint64_t storage_delta = store_.durable_metrics().storage_bytes_written - storage_before;
 
     std::ostringstream j;
     j << "{\n";

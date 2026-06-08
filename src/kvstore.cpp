@@ -27,6 +27,8 @@ std::string KVStore::sst_path(uint32_t seq) const {
 
 std::string KVStore::manifest_path() const { return data_dir_ + "/MANIFEST"; }
 
+std::string KVStore::stats_path() const { return data_dir_ + "/STATS"; }
+
 uint32_t KVStore::next_sst_sequence() const {
     uint32_t max_seq = 0;
     if (!std::filesystem::exists(data_dir_)) return 1;
@@ -74,7 +76,79 @@ KVStore::KVStore(const std::string& data_dir, const KVStoreOptions& options)
         std::ofstream out(options_.trace_path, std::ios::app);
         out << "[trace] open store dir=" << data_dir_ << "\n";
     }
+    load_stats();
     recover();
+}
+
+void KVStore::load_stats() {
+    durable_metrics_.reset();
+    std::ifstream in(stats_path());
+    if (!in) return;
+
+    std::string key;
+    uint64_t value = 0;
+    while (in >> key >> value) {
+        if (key == "user_bytes_written") durable_metrics_.user_bytes_written = value;
+        else if (key == "storage_bytes_written") durable_metrics_.storage_bytes_written = value;
+        else if (key == "put_calls") durable_metrics_.put_calls = value;
+        else if (key == "delete_calls") durable_metrics_.delete_calls = value;
+    }
+}
+
+void KVStore::persist_stats() const {
+    std::string tmp = stats_path() + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out) return;
+        out << "user_bytes_written " << durable_metrics_.user_bytes_written << "\n";
+        out << "storage_bytes_written " << durable_metrics_.storage_bytes_written << "\n";
+        out << "put_calls " << durable_metrics_.put_calls << "\n";
+        out << "delete_calls " << durable_metrics_.delete_calls << "\n";
+        out.flush();
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(stats_path(), ec);
+    ec.clear();
+    std::filesystem::rename(tmp, stats_path(), ec);
+}
+
+void KVStore::record_put_metrics(uint64_t user_bytes, uint64_t storage_bytes) {
+    metrics_.put_calls++;
+    metrics_.user_bytes_written += user_bytes;
+    metrics_.storage_bytes_written += storage_bytes;
+    durable_metrics_.put_calls++;
+    durable_metrics_.user_bytes_written += user_bytes;
+    durable_metrics_.storage_bytes_written += storage_bytes;
+    persist_stats();
+}
+
+void KVStore::record_delete_metrics(uint64_t user_bytes, uint64_t storage_bytes) {
+    metrics_.delete_calls++;
+    metrics_.user_bytes_written += user_bytes;
+    metrics_.storage_bytes_written += storage_bytes;
+    durable_metrics_.delete_calls++;
+    durable_metrics_.user_bytes_written += user_bytes;
+    durable_metrics_.storage_bytes_written += storage_bytes;
+    persist_stats();
+}
+
+void KVStore::add_storage_bytes(uint64_t bytes) {
+    metrics_.storage_bytes_written += bytes;
+    durable_metrics_.storage_bytes_written += bytes;
+    persist_stats();
+}
+
+void KVStore::add_user_bytes(uint64_t bytes) {
+    metrics_.user_bytes_written += bytes;
+    durable_metrics_.user_bytes_written += bytes;
+    persist_stats();
+}
+
+void KVStore::subtract_user_bytes(uint64_t bytes) {
+    metrics_.user_bytes_written = (bytes > metrics_.user_bytes_written) ? 0 : metrics_.user_bytes_written - bytes;
+    durable_metrics_.user_bytes_written = (bytes > durable_metrics_.user_bytes_written) ? 0 : durable_metrics_.user_bytes_written - bytes;
+    persist_stats();
 }
 
 // ── Write path ─────────────────────────────────────────────────
@@ -94,6 +168,8 @@ void KVStore::delete_key(const std::string& key) {
     ptr.offset = std::numeric_limits<uint64_t>::max();
     ptr.file_id = current_wal_id_;
     active_->put(key, ptr);
+    record_delete_metrics(static_cast<uint64_t>(key.size()),
+                          static_cast<uint64_t>(12 + key.size()));
     trace_event("memtable:tombstone", "key=" + key);
 }
 
@@ -102,11 +178,6 @@ void KVStore::put(const std::string& key, const std::string& value) {
     trace_event("put:start", "key=" + key + " value_bytes=" + std::to_string(value.size()));
 
     // Step 1: WAL append (full key + value).
-    // Write Amp Metric additions
-    metrics_.user_bytes_written += key.size() + value.size();
-    metrics_.storage_bytes_written += 12 + key.size() + value.size(); // WAL struct overhead
-    metrics_.storage_bytes_written += 4 + value.size();               // VLog overhead
-
     if (!wal_->append(key, value))
         throw std::runtime_error("[KVStore] WAL append failed");
     trace_event("wal:append", "key=" + key);
@@ -129,6 +200,8 @@ void KVStore::put(const std::string& key, const std::string& value) {
 
     // Step 5: Memtable put — only reached if all above succeeded.
     active_->put(key, ptr);
+    record_put_metrics(static_cast<uint64_t>(key.size() + value.size()),
+                       static_cast<uint64_t>(12 + key.size() + value.size() + 4 + value.size()));
     trace_event("memtable:put", "key=" + key + " entries=" + std::to_string(active_->size()));
 }
 

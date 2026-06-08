@@ -22,6 +22,8 @@ inline bool is_tombstone(const VLogPointer& ptr) {
 struct EngineMetrics {
     uint64_t user_bytes_written = 0;
     uint64_t storage_bytes_written = 0;
+    uint64_t put_calls = 0;
+    uint64_t delete_calls = 0;
     uint64_t get_calls = 0;
     uint64_t sst_considered = 0;
     uint64_t bloom_skips = 0;
@@ -31,6 +33,8 @@ struct EngineMetrics {
     void reset() {
         user_bytes_written = 0;
         storage_bytes_written = 0;
+        put_calls = 0;
+        delete_calls = 0;
         get_calls = 0;
         sst_considered = 0;
         bloom_skips = 0;
@@ -81,10 +85,11 @@ public:
 
     EngineMetrics& metrics() { return metrics_; }
     const EngineMetrics& metrics() const { return metrics_; }
+    const EngineMetrics& durable_metrics() const { return durable_metrics_; }
 
-    void add_storage_bytes(uint64_t bytes) { metrics_.storage_bytes_written += bytes; }
-    void add_user_bytes(uint64_t bytes) { metrics_.user_bytes_written += bytes; }
-    void subtract_user_bytes(uint64_t bytes) { metrics_.user_bytes_written -= bytes; }
+    void add_storage_bytes(uint64_t bytes);
+    void add_user_bytes(uint64_t bytes);
+    void subtract_user_bytes(uint64_t bytes);
 
     // ── Observability accessors (used by HttpServer) ──────────────
     size_t l0_count()            const { return l0_sstables_.size(); }
@@ -117,8 +122,13 @@ private:
     void     compact_l0_to_l1();
     void     compact_l1_to_l2();
     uint32_t next_sst_sequence() const;
+    void     load_stats();
+    void     persist_stats() const;
+    void     record_put_metrics(uint64_t user_bytes, uint64_t storage_bytes);
+    void     record_delete_metrics(uint64_t user_bytes, uint64_t storage_bytes);
 
     std::string manifest_path() const;
+    std::string stats_path() const;
 
     std::string wal_path(uint32_t id) const;
     std::string vlog_path() const;
@@ -126,6 +136,7 @@ private:
 
     std::string                  data_dir_;
     mutable EngineMetrics        metrics_;
+    EngineMetrics                durable_metrics_;
     std::unique_ptr<WAL>         wal_;
     std::unique_ptr<VLog>        vlog_;
     std::unique_ptr<Memtable>    active_;
