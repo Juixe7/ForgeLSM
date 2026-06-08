@@ -151,6 +151,26 @@ void KVStore::subtract_user_bytes(uint64_t bytes) {
     persist_stats();
 }
 
+void KVStore::reset_store() {
+    wal_.reset();
+    vlog_.reset();
+    active_.reset();
+    immutable_.reset();
+    l0_sstables_.clear();
+    l1_sstables_.clear();
+    l2_sstables_.clear();
+    manifest_ = Manifest{};
+    current_wal_id_ = 1;
+    metrics_.reset();
+    durable_metrics_.reset();
+
+    std::error_code ec;
+    std::filesystem::remove_all(data_dir_, ec);
+    std::filesystem::create_directories(data_dir_);
+    persist_stats();
+    recover();
+}
+
 // ── Write path ─────────────────────────────────────────────────
 
 void KVStore::delete_key(const std::string& key) {

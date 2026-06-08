@@ -293,6 +293,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/delete") return handle_delete(req);
         if (req.path == "/api/bench")  return handle_bench(req);
         if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
+        if (req.path == "/api/production/reset") return handle_production_reset();
         if (req.path == "/api/stream/start") return handle_stream_start(req);
         if (req.path == "/api/stream/stop") return handle_stream_stop();
         if (req.path == "/api/demo/run") return handle_demo_run(req);
@@ -902,6 +903,45 @@ HttpResponse HttpServer::handle_iot_bulk(const HttpRequest& req) {
     return resp;
 }
 
+HttpResponse HttpServer::handle_production_reset() {
+    if (stream_running_) {
+        HttpResponse busy;
+        busy.status = 400;
+        busy.body = R"({"error":"stop the background stream before resetting production"})";
+        return busy;
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        store_.reset_store();
+    }
+    {
+        std::lock_guard<std::mutex> guard(stream_mutex_);
+        stream_target_ = 0;
+        stream_completed_ = 0;
+        stream_puts_ = 0;
+        stream_updates_ = 0;
+        stream_deletes_ = 0;
+        stream_gets_ = 0;
+        stream_mismatches_ = 0;
+        stream_devices_ = 0;
+        stream_user_before_ = 0;
+        stream_storage_before_ = 0;
+        stream_mem_before_ = 0;
+        stream_l0_before_ = 0;
+        stream_l1_before_ = 0;
+        stream_l2_before_ = 0;
+        stream_status_ = "reset";
+        stream_workload_file_.clear();
+        stream_log_.clear();
+        stream_log_.push_back("production:reset | flsm_production cleared and reopened");
+    }
+
+    HttpResponse resp;
+    resp.body = R"({"ok":true,"status":"reset"})";
+    return resp;
+}
+
 void HttpServer::append_stream_log(const std::string& line) {
     std::lock_guard<std::mutex> guard(stream_mutex_);
     stream_log_.push_back(line);
@@ -1028,6 +1068,22 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
 
     if (stream_thread_.joinable()) stream_thread_.join();
 
+    uint64_t user_before = 0;
+    uint64_t storage_before = 0;
+    uint64_t mem_before = 0;
+    uint64_t l0_before = 0;
+    uint64_t l1_before = 0;
+    uint64_t l2_before = 0;
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        user_before = store_.durable_metrics().user_bytes_written;
+        storage_before = store_.durable_metrics().storage_bytes_written;
+        mem_before = static_cast<uint64_t>(store_.memtable_entries());
+        l0_before = static_cast<uint64_t>(store_.l0_count());
+        l1_before = static_cast<uint64_t>(store_.l1_count());
+        l2_before = static_cast<uint64_t>(store_.l2_count());
+    }
+
     {
         std::lock_guard<std::mutex> guard(stream_mutex_);
         stream_target_ = operations;
@@ -1038,6 +1094,12 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
         stream_gets_ = 0;
         stream_mismatches_ = 0;
         stream_devices_ = devices;
+        stream_user_before_ = user_before;
+        stream_storage_before_ = storage_before;
+        stream_mem_before_ = mem_before;
+        stream_l0_before_ = l0_before;
+        stream_l1_before_ = l1_before;
+        stream_l2_before_ = l2_before;
         stream_status_ = "starting";
         stream_workload_file_.clear();
         stream_log_.clear();
@@ -1062,29 +1124,102 @@ HttpResponse HttpServer::handle_stream_stop() {
 }
 
 HttpResponse HttpServer::handle_stream_status() {
-    std::lock_guard<std::mutex> guard(stream_mutex_);
-    double progress = stream_target_ > 0
-        ? static_cast<double>(stream_completed_) / static_cast<double>(stream_target_) * 100.0
+    bool running = false;
+    std::string status;
+    std::string workload_file;
+    std::deque<std::string> log;
+    uint64_t target = 0;
+    uint64_t completed = 0;
+    uint64_t devices = 0;
+    uint64_t puts = 0;
+    uint64_t updates = 0;
+    uint64_t deletes = 0;
+    uint64_t gets = 0;
+    uint64_t mismatches = 0;
+    uint64_t user_before = 0;
+    uint64_t storage_before = 0;
+    uint64_t mem_before = 0;
+    uint64_t l0_before = 0;
+    uint64_t l1_before = 0;
+    uint64_t l2_before = 0;
+
+    {
+        std::lock_guard<std::mutex> guard(stream_mutex_);
+        running = stream_running_;
+        status = stream_status_;
+        workload_file = stream_workload_file_;
+        log = stream_log_;
+        target = stream_target_;
+        completed = stream_completed_;
+        devices = stream_devices_;
+        puts = stream_puts_;
+        updates = stream_updates_;
+        deletes = stream_deletes_;
+        gets = stream_gets_;
+        mismatches = stream_mismatches_;
+        user_before = stream_user_before_;
+        storage_before = stream_storage_before_;
+        mem_before = stream_mem_before_;
+        l0_before = stream_l0_before_;
+        l1_before = stream_l1_before_;
+        l2_before = stream_l2_before_;
+    }
+
+    uint64_t user_after = 0;
+    uint64_t storage_after = 0;
+    uint64_t mem_after = 0;
+    uint64_t l0_after = 0;
+    uint64_t l1_after = 0;
+    uint64_t l2_after = 0;
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        user_after = store_.durable_metrics().user_bytes_written;
+        storage_after = store_.durable_metrics().storage_bytes_written;
+        mem_after = static_cast<uint64_t>(store_.memtable_entries());
+        l0_after = static_cast<uint64_t>(store_.l0_count());
+        l1_after = static_cast<uint64_t>(store_.l1_count());
+        l2_after = static_cast<uint64_t>(store_.l2_count());
+    }
+
+    uint64_t user_delta = user_after >= user_before ? user_after - user_before : 0;
+    uint64_t storage_delta = storage_after >= storage_before ? storage_after - storage_before : 0;
+    double write_amp = user_delta > 0
+        ? static_cast<double>(storage_delta) / static_cast<double>(user_delta)
+        : 0.0;
+
+    double progress = target > 0
+        ? static_cast<double>(completed) / static_cast<double>(target) * 100.0
         : 0.0;
 
     std::ostringstream j;
     j << "{\n";
-    j << json_bool("running", stream_running_);
-    j << json_str("status", stream_status_);
-    j << json_num("target_operations", stream_target_);
-    j << json_num("completed_operations", stream_completed_);
-    j << json_num("devices", stream_devices_);
-    j << json_num("puts", stream_puts_);
-    j << json_num("updates", stream_updates_);
-    j << json_num("deletes", stream_deletes_);
-    j << json_num("gets", stream_gets_);
-    j << json_num("mismatches", stream_mismatches_);
-    j << json_str("workload_file", stream_workload_file_);
+    j << json_bool("running", running);
+    j << json_str("status", status);
+    j << json_num("target_operations", target);
+    j << json_num("completed_operations", completed);
+    j << json_num("devices", devices);
+    j << json_num("puts", puts);
+    j << json_num("updates", updates);
+    j << json_num("deletes", deletes);
+    j << json_num("gets", gets);
+    j << json_num("mismatches", mismatches);
+    j << json_num("logical_bytes_delta", user_delta);
+    j << json_num("physical_bytes_delta", storage_delta);
+    j << json_dbl("write_amplification", write_amp);
+    j << json_num("memtable_entries_before", mem_before);
+    j << json_num("memtable_entries_after", mem_after);
+    j << json_num("l0_before", l0_before);
+    j << json_num("l0_after", l0_after);
+    j << json_num("l1_before", l1_before);
+    j << json_num("l1_after", l1_after);
+    j << json_num("l2_before", l2_before);
+    j << json_num("l2_after", l2_after);
+    j << json_str("workload_file", workload_file);
     j << json_dbl("progress_pct", progress);
     j << "  \"log\": [";
-    for (size_t i = 0; i < stream_log_.size(); ++i) {
+    for (size_t i = 0; i < log.size(); ++i) {
         if (i) j << ",";
-        j << "\"" << json_escape(stream_log_[i]) << "\"";
+        j << "\"" << json_escape(log[i]) << "\"";
     }
     j << "]\n";
     j << "}";

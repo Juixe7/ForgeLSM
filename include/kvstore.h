@@ -79,6 +79,7 @@ public:
     void put(const std::string& key, const std::string& value);
     void delete_key(const std::string& key);
     bool get(const std::string& key, std::string& out_value) const;
+    void reset_store();
 
     size_t memtable_size() const;
     bool   wal_tainted() const;

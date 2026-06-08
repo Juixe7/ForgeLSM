@@ -68,6 +68,7 @@ struct HttpResponse {
 //   POST /api/delete        → body: {"key":"k"}
 //   POST /api/bench         → body: {"type":"random_write","ops":500}
 //   POST /api/iot/bulk      → body: {"events":10000,"devices":16}
+//   POST /api/production/reset → reset production store directory
 //   POST /api/stream/start  → start background mixed production IoT stream
 //   POST /api/stream/stop   → stop background production stream
 //   GET  /api/stream/status → stream counters and recent trace
@@ -106,6 +107,7 @@ private:
     HttpResponse handle_delete(const HttpRequest& req);
     HttpResponse handle_bench(const HttpRequest& req);
     HttpResponse handle_iot_bulk(const HttpRequest& req);
+    HttpResponse handle_production_reset();
     HttpResponse handle_stream_start(const HttpRequest& req);
     HttpResponse handle_stream_stop();
     HttpResponse handle_stream_status();
@@ -150,6 +152,12 @@ private:
     uint64_t stream_gets_ = 0;
     uint64_t stream_mismatches_ = 0;
     uint64_t stream_devices_ = 0;
+    uint64_t stream_user_before_ = 0;
+    uint64_t stream_storage_before_ = 0;
+    uint64_t stream_mem_before_ = 0;
+    uint64_t stream_l0_before_ = 0;
+    uint64_t stream_l1_before_ = 0;
+    uint64_t stream_l2_before_ = 0;
     std::string stream_status_ = "idle";
     std::string stream_workload_file_;
     std::deque<std::string> stream_log_;

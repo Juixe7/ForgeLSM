@@ -6,9 +6,7 @@ const els = {
   statusPill: document.getElementById('status-pill'),
   statusText: document.getElementById('status-text'),
   refreshState: document.getElementById('refresh-state'),
-  prodRun: document.getElementById('prod-run'),
-  prodEvents: document.getElementById('prod-events'),
-  prodDevices: document.getElementById('prod-devices'),
+  resetProduction: document.getElementById('reset-production'),
   prodRaw: document.getElementById('prod-raw'),
   prodTrace: document.getElementById('prod-trace'),
   streamStart: document.getElementById('stream-start'),
@@ -92,17 +90,11 @@ function renderSystem(metrics, lsm, debug) {
   setText('state-l1', `${fmtNum(lsm.l1_count)} files`);
   setText('state-l2', `${fmtNum(lsm.l2_count)} files`);
   setText('state-wal', debug.wal_tainted ? 'TAINTED' : `Clean, ${fmtNum(debug.wal_files)} file(s), ${fmtBytes(debug.wal_bytes)}`);
-  setText('state-total-user', fmtBytes(metrics.total_user_bytes_written ?? metrics.user_bytes_written));
-  setText('state-total-storage', fmtBytes(metrics.total_storage_bytes_written ?? metrics.storage_bytes_written));
-  setText('state-total-ops', `${fmtNum(metrics.total_put_calls || 0)} puts, ${fmtNum(metrics.total_delete_calls || 0)} deletes`);
-  setText('state-session-user', fmtBytes(metrics.session_user_bytes_written || 0));
-  setText('state-session-storage', fmtBytes(metrics.session_storage_bytes_written || 0));
-  setText('state-session-ops', `${fmtNum(metrics.session_put_calls || 0)} puts, ${fmtNum(metrics.session_delete_calls || 0)} deletes`);
   setText('state-total-disk', fmtBytes(debug.total_disk_bytes));
-  setText('state-live-logical', `${fmtBytes(debug.live_logical_bytes_estimate)} across ${fmtNum(debug.live_keys_estimate)} live keys`);
+  setText('state-live-logical', fmtBytes(debug.live_logical_bytes_estimate));
+  setText('state-live-keys', fmtNum(debug.live_keys_estimate));
+  setText('state-tombstones', fmtNum(debug.tombstones_estimate));
   setText('state-space-amp', `${Number(debug.space_amplification_estimate || 0).toFixed(2)}x`);
-  setText('state-write-amp', fmtAmp(metrics.write_amplification));
-  setText('state-read-amp', fmtAmp(metrics.read_amplification));
 }
 
 function renderStorage(files) {
@@ -186,6 +178,17 @@ function renderStreamStatus(status) {
     `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`
   );
   setText('stream-file', status.workload_file || '-');
+  setText('last-completed', `${fmtNum(status.completed_operations)} / ${fmtNum(status.target_operations)} ops`);
+  setText('last-mix', `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`);
+  setText('last-logical', fmtBytes(status.logical_bytes_delta));
+  setText('last-physical', fmtBytes(status.physical_bytes_delta));
+  setText('last-write-amp', fmtAmp(status.write_amplification));
+  setText('last-mem-transition', `${fmtNum(status.memtable_entries_before)} -> ${fmtNum(status.memtable_entries_after)} entries`);
+  setText('last-l0-transition', `${fmtNum(status.l0_before)} -> ${fmtNum(status.l0_after)} files`);
+  setText('last-l1-transition', `${fmtNum(status.l1_before)} -> ${fmtNum(status.l1_after)} files`);
+  setText('last-l2-transition', `${fmtNum(status.l2_before)} -> ${fmtNum(status.l2_after)} files`);
+  setText('last-mismatches', fmtNum(status.mismatches));
+  byId('last-mismatches').className = Number(status.mismatches || 0) === 0 ? 'pass' : 'fail';
 
   const log = Array.isArray(status.log) ? status.log : [];
   if (log.length) {
@@ -237,36 +240,19 @@ async function stopStream() {
   }
 }
 
-function setProductionBusy(isBusy) {
-  els.prodRun.disabled = isBusy;
-  els.prodRun.textContent = isBusy ? 'Writing...' : 'Write To Production';
-}
-
-async function runProductionWorkload() {
-  const events = parseInt(els.prodEvents.value, 10);
-  const devices = parseInt(els.prodDevices.value, 10);
-  setProductionBusy(true);
-  setText('prod-status', 'RUNNING');
-  byId('prod-status').className = 'pending';
-
+async function resetProductionStore() {
+  els.resetProduction.disabled = true;
   try {
-    const result = await postJson('/api/iot/bulk', {events, devices});
-    setText('prod-status', String(result.status || 'fail').toUpperCase());
-    byId('prod-status').className = statusClass(result.status);
-    setText('prod-written', fmtNum(result.events_written));
-    setText('prod-mismatches', fmtNum(result.sample_mismatches));
-    byId('prod-mismatches').className = Number(result.sample_mismatches || 0) === 0 ? 'pass' : 'fail';
-    setText('prod-throughput', `${fmtNum(Math.round(result.throughput || 0))} ops/s`);
-    renderTrace(result.trace);
+    const result = await postJson('/api/production/reset', {});
     els.prodRaw.textContent = JSON.stringify(result, null, 2);
+    renderTrace([{phase: 'production-reset', detail: 'flsm_production cleared; run a stream to generate fresh evidence'}]);
     await refreshState(false);
+    await refreshStreamStatus();
   } catch (err) {
-    setText('prod-status', 'FAIL');
-    byId('prod-status').className = 'fail';
     els.prodRaw.textContent = JSON.stringify({error: err.message}, null, 2);
-    renderTrace([{phase: 'error', detail: err.message}]);
+    renderTrace([{phase: 'reset-error', detail: err.message}]);
   } finally {
-    setProductionBusy(false);
+    els.resetProduction.disabled = false;
   }
 }
 
@@ -401,7 +387,7 @@ document.querySelectorAll('.tab-btn').forEach((button) => {
 });
 
 els.refreshState.addEventListener('click', () => refreshState(true));
-els.prodRun.addEventListener('click', runProductionWorkload);
+els.resetProduction.addEventListener('click', resetProductionStore);
 els.streamStart.addEventListener('click', startStream);
 els.streamStop.addEventListener('click', stopStream);
 els.demoRun.addEventListener('click', runDemo);

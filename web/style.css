@@ -256,6 +256,7 @@ p {
 select,
 .primary-btn,
 .secondary-btn,
+.danger-btn,
 .matrix-btn {
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -269,7 +270,8 @@ select {
 }
 
 .primary-btn,
-.secondary-btn {
+.secondary-btn,
+.danger-btn {
   min-height: 36px;
   padding: 8px 12px;
   cursor: pointer;
@@ -284,6 +286,20 @@ select {
 
 .secondary-btn {
   color: var(--muted);
+}
+
+.danger-btn {
+  color: #ffd7d7;
+  border-color: #7b3636;
+  background: #32191b;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 button:disabled {
@@ -381,6 +397,12 @@ button:disabled {
   gap: 8px;
 }
 
+.trace-panel .step-list {
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .step-row {
   display: grid;
   grid-template-columns: 70px 1fr;
@@ -471,6 +493,7 @@ button:disabled {
 
   .topbar-right,
   .control-row,
+  .button-row,
   .panel-title-row {
     width: 100%;
     align-items: stretch;

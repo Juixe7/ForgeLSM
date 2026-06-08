@@ -37,10 +37,13 @@
         <section class="audit-panel system-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Production System State</h1>
+              <h1>Current Database State</h1>
               <p>Live production store: <code>flsm_production</code></p>
             </div>
-            <button class="secondary-btn" id="refresh-state">Refresh</button>
+            <div class="button-row">
+              <button class="secondary-btn" id="refresh-state">Refresh</button>
+              <button class="danger-btn" id="reset-production">Reset Store</button>
+            </div>
           </div>
           <table class="audit-table">
             <tbody>
@@ -51,17 +54,11 @@
               <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
               <tr><th>L2 SSTables</th><td id="state-l2">-</td></tr>
               <tr><th>WAL status</th><td id="state-wal">-</td></tr>
-              <tr><th>Total logical writes</th><td id="state-total-user">-</td></tr>
-              <tr><th>Total physical writes</th><td id="state-total-storage">-</td></tr>
-              <tr><th>Total put/delete ops</th><td id="state-total-ops">-</td></tr>
-              <tr><th>Session logical writes</th><td id="state-session-user">-</td></tr>
-              <tr><th>Session physical writes</th><td id="state-session-storage">-</td></tr>
-              <tr><th>Session put/delete ops</th><td id="state-session-ops">-</td></tr>
               <tr><th>Total disk bytes</th><td id="state-total-disk">-</td></tr>
               <tr><th>Live logical bytes</th><td id="state-live-logical">-</td></tr>
+              <tr><th>Live keys</th><td id="state-live-keys">-</td></tr>
+              <tr><th>Tombstones</th><td id="state-tombstones">-</td></tr>
               <tr><th>Space amplification</th><td id="state-space-amp">-</td></tr>
-              <tr><th>Write amplification</th><td id="state-write-amp">-</td></tr>
-              <tr><th>Read amplification</th><td id="state-read-amp">-</td></tr>
             </tbody>
           </table>
         </section>
@@ -69,45 +66,8 @@
         <section class="audit-panel workload-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Production IoT Workload</h1>
-              <p>Writes generated sensor readings into the live engine so storage changes are visible.</p>
-            </div>
-          </div>
-          <div class="control-row">
-            <label>
-              Event count
-              <select id="prod-events">
-                <option value="1000">1K events</option>
-                <option value="10000" selected>10K events</option>
-                <option value="25000">25K events</option>
-                <option value="50000">50K events</option>
-                <option value="100000">100K events</option>
-              </select>
-            </label>
-            <label>
-              Devices
-              <select id="prod-devices">
-                <option value="8">8 devices</option>
-                <option value="16" selected>16 devices</option>
-                <option value="64">64 devices</option>
-                <option value="256">256 devices</option>
-              </select>
-            </label>
-            <button class="primary-btn" id="prod-run">Write To Production</button>
-          </div>
-          <div class="workload-summary">
-            <div><span>Status</span><strong id="prod-status">Not run</strong></div>
-            <div><span>Events written</span><strong id="prod-written">-</strong></div>
-            <div><span>Sample mismatches</span><strong id="prod-mismatches">-</strong></div>
-            <div><span>Throughput</span><strong id="prod-throughput">-</strong></div>
-          </div>
-        </section>
-
-        <section class="audit-panel workload-panel">
-          <div class="panel-title-row">
-            <div>
-              <h1>Background Device Stream</h1>
-              <p>Runs mixed production operations in the background: telemetry puts, config updates, tombstone deletes, and reads.</p>
+              <h1>Production IoT Stream</h1>
+              <p>Runs mixed production operations: telemetry puts, config updates, tombstone deletes, and reads.</p>
             </div>
           </div>
           <div class="control-row">
@@ -138,6 +98,29 @@
             <div><span>Mixed ops</span><strong id="stream-mix">-</strong></div>
             <div><span>Workload file</span><strong id="stream-file">-</strong></div>
           </div>
+        </section>
+
+        <section class="audit-panel workload-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Last Run Result</h1>
+              <p>Only the most recent stream run, measured from its start point.</p>
+            </div>
+          </div>
+          <table class="audit-table">
+            <tbody>
+              <tr><th>Completed operations</th><td id="last-completed">-</td></tr>
+              <tr><th>Put/update/delete/get</th><td id="last-mix">-</td></tr>
+              <tr><th>Logical bytes written</th><td id="last-logical">-</td></tr>
+              <tr><th>Physical bytes written</th><td id="last-physical">-</td></tr>
+              <tr><th>Write amplification</th><td id="last-write-amp">-</td></tr>
+              <tr><th>Memtable transition</th><td id="last-mem-transition">-</td></tr>
+              <tr><th>L0 transition</th><td id="last-l0-transition">-</td></tr>
+              <tr><th>L1 transition</th><td id="last-l1-transition">-</td></tr>
+              <tr><th>L2 transition</th><td id="last-l2-transition">-</td></tr>
+              <tr><th>Mismatches</th><td id="last-mismatches">-</td></tr>
+            </tbody>
+          </table>
         </section>
 
         <section class="audit-panel internals-panel">
