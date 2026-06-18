@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -839,6 +840,45 @@ static void test_gc_state_recovery_finalize(const std::string& dir) {
     }
 }
 
+static void test_stream2_workload_math() {
+    std::cout << "\n=== Test 32: Stream 2 Workload Math ===\n";
+
+    const uint64_t operations = 10000;
+    const uint64_t devices = 100;
+    uint64_t puts = 0;
+    uint64_t updates = 0;
+    uint64_t deletes = 0;
+    uint64_t gets = 0;
+    std::set<std::string> telemetry_keys;
+    std::set<std::string> state_keys;
+
+    for (uint64_t i = 0; i < operations; ++i) {
+        uint64_t op_bucket = i % 100;
+        uint64_t device = stream2_device_for_operation(i, op_bucket, devices);
+
+        if (op_bucket < 80) {
+            puts++;
+            telemetry_keys.insert("iot:device_" + std::to_string(device) +
+                                  ":telemetry:" + std::to_string(i));
+        } else if (op_bucket < 90) {
+            updates++;
+            state_keys.insert("iot:device_" + std::to_string(device) +
+                              ":" + stream2_state_family(i, op_bucket));
+        } else if (op_bucket < 95) {
+            deletes++;
+        } else {
+            gets++;
+        }
+    }
+
+    expect_eq(std::to_string(puts), "8000", "Stream 2 10k workload has 8000 telemetry puts");
+    expect_eq(std::to_string(updates), "1000", "Stream 2 10k workload has 1000 state updates");
+    expect_eq(std::to_string(deletes), "500", "Stream 2 10k workload has 500 deletes");
+    expect_eq(std::to_string(gets), "500", "Stream 2 10k workload has 500 gets");
+    expect_eq(std::to_string(telemetry_keys.size()), "8000", "Stream 2 telemetry puts are unique by sequence");
+    expect_eq(std::to_string(state_keys.size()), "500", "Stream 2 updates cover 5 state families across 100 devices");
+}
+
 // ── main ───────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -903,6 +943,7 @@ int main(int argc, char* argv[]) {
     test_dynamic_level_compaction_recovery(dir);
     test_gc_state_recovery_rollback(dir);
     test_gc_state_recovery_finalize(dir);
+    test_stream2_workload_math();
 
     clean_dir(dir);
     clean_dir("flsm_experiment_lab");

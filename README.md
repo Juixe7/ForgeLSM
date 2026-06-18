@@ -3,7 +3,7 @@
 **ForgeLSM is a C++20 WiscKey-style LSM key-value storage engine built from scratch for edge/IoT event storage experiments.**
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build)
-[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-82%20passing-brightgreen)](#testing)
 [![Docker](https://img.shields.io/badge/docker-ready-blue)](#docker)
 
 ForgeLSM separates small keys from larger values: keys, tombstones, and value pointers are indexed through an LSM tree, while event payloads are appended to a value log. The project is aimed at demonstrating how an embedded event store can survive restarts, compact old files, skip unnecessary reads with Bloom filters, and prove correctness through deterministic workloads.
@@ -274,7 +274,7 @@ Run the binary without arguments to execute the built-in test suite:
 On the current codebase, the suite reports:
 
 ```text
-Results: 76 passed, 0 failed.
+Results: 82 passed, 0 failed.
 ```
 
 The tests cover:
@@ -291,6 +291,7 @@ The tests cover:
 - Experiment Lab reference-model verification.
 - L2 tombstone preservation regression.
 - VLog GC rollback/finalize recovery.
+- Stream 2 workload ratio and uniqueness math.
 
 ## Project Structure
 
@@ -375,5 +376,5 @@ docker compose up -d
 - Multi-file VLog generations with richer GC metadata.
 - MQTT ingestion for realistic IoT architecture.
 - Browser-visible granular engine trace logs.
-- More formal tests for Stream 2 uniqueness math.
+- MQTT ingestion for realistic IoT architecture.
 - README screenshots refreshed after the final UI settles.

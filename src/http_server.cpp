@@ -997,7 +997,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
     for (uint64_t i = 0; i < operations && !stream_stop_; ++i) {
         uint64_t op_bucket = i % 100;
         uint64_t device = (mode == "stream2")
-            ? (((i / 100) * 17 + op_bucket * 13 + 7) % devices)
+            ? stream2_device_for_operation(i, op_bucket, devices)
             : (i % devices);
         std::string op;
         std::string key;
@@ -1030,14 +1030,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
         } else if (op_bucket < 90) {
             op = "update";
             if (mode == "stream2") {
-                static const std::array<const char*, 5> families = {
-                    "config:sampling",
-                    "config:threshold",
-                    "status:health",
-                    "status:firmware",
-                    "calibration:vibration"
-                };
-                const std::string family = families[(i / 100 + op_bucket) % families.size()];
+                const std::string family = stream2_state_family(i, op_bucket);
                 key = "iot:device_" + std::to_string(device) + ":" + family;
                 value = "{\"device_id\":\"device_" + std::to_string(device) +
                         "\",\"op\":\"state_update\",\"field\":\"" + family +

@@ -27,6 +27,7 @@
 
 #include "kvstore.h"
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -48,6 +49,24 @@ struct HttpResponse {
     std::string content_type = "application/json";
     std::string body;
 };
+
+inline uint64_t stream2_device_for_operation(uint64_t operation_index,
+                                             uint64_t op_bucket,
+                                             uint64_t devices) {
+    if (devices == 0) return 0;
+    return (((operation_index / 100) * 17 + op_bucket * 13 + 7) % devices);
+}
+
+inline const char* stream2_state_family(uint64_t operation_index, uint64_t op_bucket) {
+    static constexpr std::array<const char*, 5> families = {
+        "config:sampling",
+        "config:threshold",
+        "status:health",
+        "status:firmware",
+        "calibration:vibration"
+    };
+    return families[(operation_index / 100 + op_bucket) % families.size()];
+}
 
 // ── HttpServer ────────────────────────────────────────────────────
 //
