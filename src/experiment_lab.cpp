@@ -135,6 +135,8 @@ struct LabRun {
     uint64_t recoveries = 0;
     uint64_t verify_checks = 0;
     uint64_t mismatches = 0;
+    uint64_t script_user_bytes_written = 0;
+    uint64_t script_storage_bytes_written = 0;
     std::vector<std::string> steps;
     std::vector<std::string> mismatch_rows;
     std::map<std::string, std::string> model;
@@ -187,6 +189,15 @@ struct LabRun {
         return checked;
     }
 
+    void capture_write_delta(const EngineMetrics& before, const EngineMetrics& after) {
+        if (after.user_bytes_written >= before.user_bytes_written) {
+            script_user_bytes_written += after.user_bytes_written - before.user_bytes_written;
+        }
+        if (after.storage_bytes_written >= before.storage_bytes_written) {
+            script_storage_bytes_written += after.storage_bytes_written - before.storage_bytes_written;
+        }
+    }
+
     std::string to_json(KVStore& db, const std::string& dir) {
         auto summary = db.storage_summary();
         uint64_t wal_bytes = 0;
@@ -214,9 +225,8 @@ struct LabRun {
         double space_amp = summary.live_logical_bytes > 0
             ? static_cast<double>(total_disk) / static_cast<double>(summary.live_logical_bytes)
             : 0.0;
-        const auto& m = db.metrics();
-        double write_amp = m.user_bytes_written > 0
-            ? static_cast<double>(m.storage_bytes_written) / static_cast<double>(m.user_bytes_written)
+        double write_amp = script_user_bytes_written > 0
+            ? static_cast<double>(script_storage_bytes_written) / static_cast<double>(script_user_bytes_written)
             : 0.0;
 
         std::ostringstream j;
@@ -233,6 +243,8 @@ struct LabRun {
         j << json_num("recoveries", recoveries);
         j << json_num("verify_checks", verify_checks);
         j << json_num("mismatches", mismatches);
+        j << json_num("script_user_bytes_written", script_user_bytes_written);
+        j << json_num("script_storage_bytes_written", script_storage_bytes_written);
         j << json_num("model_live_keys", static_cast<uint64_t>(model.size()));
         j << json_num("model_deleted_keys", static_cast<uint64_t>(deleted_keys.size()));
         j << json_num("memtable_entries", static_cast<uint64_t>(db.memtable_entries()));
@@ -269,7 +281,9 @@ struct LabRun {
 };
 
 void do_put(LabRun& run, KVStore& db, const std::string& key, const std::string& value, bool is_update) {
+    EngineMetrics before = db.metrics();
     db.put(key, value);
+    run.capture_write_delta(before, db.metrics());
     run.model[key] = value;
     run.deleted_keys.erase(key);
     run.generated_ops++;
@@ -278,7 +292,9 @@ void do_put(LabRun& run, KVStore& db, const std::string& key, const std::string&
 }
 
 void do_delete(LabRun& run, KVStore& db, const std::string& key) {
+    EngineMetrics before = db.metrics();
     db.delete_key(key);
+    run.capture_write_delta(before, db.metrics());
     run.model.erase(key);
     run.deleted_keys.insert(key);
     run.generated_ops++;
@@ -384,17 +400,23 @@ std::string run_experiment_lab(const ExperimentOptions& options) {
         } else if (cmd == "put") {
             handled = run_manual_put(run, db, line, false);
         } else if (cmd == "flush") {
+            EngineMetrics before = db.metrics();
             db.force_flush();
+            run.capture_write_delta(before, db.metrics());
             run.flushes++;
             run.step("flush", true, "Memtable forced to L0 SSTable if non-empty.");
             handled = true;
         } else if (cmd == "compact") {
+            EngineMetrics before = db.metrics();
             db.force_compaction();
+            run.capture_write_delta(before, db.metrics());
             run.compactions++;
             run.step("compact", true, "L0 to L1 compaction requested.");
             handled = true;
         } else if (cmd == "compact_l1" || cmd == "compact-l1") {
+            EngineMetrics before = db.metrics();
             db.force_l1_compaction();
+            run.capture_write_delta(before, db.metrics());
             run.compactions++;
             run.step("compact_l1", true, "L1 to L2 compaction requested.");
             handled = true;

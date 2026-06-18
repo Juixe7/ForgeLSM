@@ -7,8 +7,10 @@
 #include "benchmark.h"
 #include "cli.h"
 #include "http_server.h"
+#include "experiment_lab.h"
 
 #include <cstdint>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -66,6 +68,23 @@ static void append_raw_bytes(const std::string& path,
 static void clean_dir(const std::string& dir) {
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+static bool json_has(const std::string& json, const std::string& needle) {
+    return json.find(needle) != std::string::npos;
+}
+
+static double json_get_double_field(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\":";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return 0.0;
+    pos += needle.size();
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
+    try {
+        return std::stod(json.substr(pos));
+    } catch (...) {
+        return 0.0;
+    }
 }
 
 // Find the active WAL file in a directory (wal_NNNNNN.log).
@@ -683,6 +702,43 @@ static void test_bloom_invariant_disabling(const std::string& dir) {
     }
 }
 
+static void test_l2_tombstone_experiment_regression() {
+    std::cout << "\n=== Test 27: L2 Tombstone Experiment Regression ===\n";
+    ExperimentOptions options;
+    options.script =
+        "insert 1..3000 random\n"
+        "update 800..1500 random\n"
+        "delete 1000..1300 random\n"
+        "flush\n"
+        "compact\n"
+        "recover\n"
+        "verify\n"
+        "state\n";
+
+    std::string result = run_experiment_lab(options);
+    expect_true(json_has(result, "\"status\": \"pass\""), "experiment preserves tombstones across L2 recovery");
+    expect_true(json_has(result, "\"mismatches\": 0"), "experiment reports zero mismatches for deleted L2 keys");
+    expect_true(json_has(result, "\"model_deleted_keys\": 301"), "experiment tracked all deleted keys explicitly");
+}
+
+static void test_experiment_lab_script_metrics() {
+    std::cout << "\n=== Test 28: Experiment Lab Script Metrics ===\n";
+    ExperimentOptions options;
+    options.script =
+        "put manual:key hello\n"
+        "get manual:key\n"
+        "update manual:key hello_v2\n"
+        "delete manual:key\n"
+        "recover\n"
+        "verify\n";
+
+    std::string result = run_experiment_lab(options);
+    double write_amp = json_get_double_field(result, "write_amplification");
+    expect_true(json_has(result, "\"status\": \"pass\""), "manual experiment script verifies against reference model");
+    expect_true(json_has(result, "\"generated_ops\": 4"), "manual experiment counts put/get/update/delete operations");
+    expect_true(write_amp > 0.0, "experiment write amplification survives recover");
+}
+
 // ── main ───────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -742,8 +798,11 @@ int main(int argc, char* argv[]) {
     test_bloom_hash_stability();
     test_bloom_checksum_coverage(dir);
     test_bloom_invariant_disabling(dir);
+    test_l2_tombstone_experiment_regression();
+    test_experiment_lab_script_metrics();
 
     clean_dir(dir);
+    clean_dir("flsm_experiment_lab");
 
     std::cout << "\n──────────────────────────────\n"
               << "Results: " << g_pass << " passed, "
