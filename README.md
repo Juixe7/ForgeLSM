@@ -3,7 +3,7 @@
 **ForgeLSM is a C++20 WiscKey-style LSM key-value storage engine built from scratch for edge/IoT event storage experiments.**
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build)
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)](#testing)
 [![Docker](https://img.shields.io/badge/docker-ready-blue)](#docker)
 
 ForgeLSM separates small keys from larger values: keys, tombstones, and value pointers are indexed through an LSM tree, while event payloads are appended to a value log. The project is aimed at demonstrating how an embedded event store can survive restarts, compact old files, skip unnecessary reads with Bloom filters, and prove correctness through deterministic workloads.
@@ -13,6 +13,7 @@ ForgeLSM separates small keys from larger values: keys, tombstones, and value po
 - Write-ahead log recovery with checksum validation and corrupt-tail truncation.
 - Memtable writes, flushes, SSTable files, Bloom filters, and dynamically tracked levels.
 - WiscKey-style value log storage for payload bytes.
+- VLog garbage collection with crash-state recovery.
 - L0 -> L1 -> L2 compaction with tombstone preservation for deleted keys.
 - Atomic SSTable commits using temp file write, fsync, and rename.
 - Persistent production statistics in a `STATS` file.
@@ -273,7 +274,7 @@ Run the binary without arguments to execute the built-in test suite:
 On the current codebase, the suite reports:
 
 ```text
-Results: 70 passed, 0 failed.
+Results: 76 passed, 0 failed.
 ```
 
 The tests cover:
@@ -289,6 +290,7 @@ The tests cover:
 - Benchmark isolation.
 - Experiment Lab reference-model verification.
 - L2 tombstone preservation regression.
+- VLog GC rollback/finalize recovery.
 
 ## Project Structure
 
@@ -364,14 +366,14 @@ docker compose up -d
 
 ## Current Limits
 
-- VLog garbage collection exists, but full crash-safe GC redesign is still future work.
+- VLog GC is crash-aware through `GC_STATE`, but still runs synchronously and uses a single active VLog file.
 - MQTT-based ingestion is not implemented yet; current IoT streams are generated through the local HTTP API/server path.
 - The HTTP server is intentionally minimal and hand-written for learning; it is not a general-purpose production web framework.
 
 ## Future Work
 
-- Fully crash-safe VLog GC.
+- Multi-file VLog generations with richer GC metadata.
 - MQTT ingestion for realistic IoT architecture.
 - Browser-visible granular engine trace logs.
-- More formal tests for Stream 2 uniqueness math and GC recovery.
+- More formal tests for Stream 2 uniqueness math.
 - README screenshots refreshed after the final UI settles.

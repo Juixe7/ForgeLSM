@@ -29,6 +29,8 @@ std::string KVStore::manifest_path() const { return data_dir_ + "/MANIFEST"; }
 
 std::string KVStore::stats_path() const { return data_dir_ + "/STATS"; }
 
+std::string KVStore::gc_state_path() const { return data_dir_ + "/GC_STATE"; }
+
 uint32_t KVStore::next_sst_sequence() const {
     uint32_t max_seq = 0;
     if (!std::filesystem::exists(data_dir_)) return 1;
@@ -375,6 +377,8 @@ void KVStore::rotate_wal() {
 // ── Recovery ───────────────────────────────────────────────────
 
 void KVStore::recover() {
+    recover_incomplete_gc();
+
     // Load existing SSTables (validate each).
     load_sstables();
 
@@ -448,6 +452,49 @@ void KVStore::recover() {
     if (any_tainted)
         std::cout << " (WAL TAINTED)";
     std::cout << "\n";
+}
+
+void KVStore::recover_incomplete_gc() {
+    const std::filesystem::path state_path(gc_state_path());
+    if (!std::filesystem::exists(state_path)) return;
+
+    std::string phase;
+    {
+        std::ifstream in(state_path);
+        std::string key;
+        while (in >> key) {
+            if (key == "phase") in >> phase;
+        }
+    }
+
+    std::filesystem::path active_vlog(vlog_path());
+    std::filesystem::path old_vlog(data_dir_ + "/vlog_gc_target.bin");
+    std::error_code ec;
+
+    if (phase == "rewrite_complete") {
+        std::filesystem::remove(old_vlog, ec);
+        ec.clear();
+        std::filesystem::remove(state_path, ec);
+        std::cout << "[VLog GC] Recovery finalized completed GC state.\n";
+        return;
+    }
+
+    // Any earlier phase is rolled back by restoring the isolated old VLog.
+    // Rewritten GC puts, if any, are still safely replayed from WAL.
+    if (std::filesystem::exists(old_vlog, ec)) {
+        std::filesystem::remove(active_vlog, ec);
+        ec.clear();
+        std::filesystem::rename(old_vlog, active_vlog, ec);
+        if (ec) {
+            std::cerr << "[VLog GC] WARNING: failed to restore old VLog during recovery: "
+                      << ec.message() << "\n";
+        } else {
+            std::cout << "[VLog GC] Recovery rolled back incomplete GC state.\n";
+        }
+    }
+
+    ec.clear();
+    std::filesystem::remove(state_path, ec);
 }
 
 // ── SSTable loading ────────────────────────────────────────────

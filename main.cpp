@@ -780,6 +780,65 @@ static void test_dynamic_level_compaction_recovery(const std::string& dir) {
     }
 }
 
+static void test_gc_state_recovery_rollback(const std::string& dir) {
+    std::cout << "\n=== Test 30: VLog GC State Rollback Recovery ===\n";
+    clean_dir(dir);
+
+    {
+        KVStore store(dir);
+        store.put("gc_state_key", "stable_value");
+        store.force_flush();
+    }
+
+    std::filesystem::rename(dir + "/vlog.bin", dir + "/vlog_gc_target.bin");
+    {
+        std::ofstream out(dir + "/GC_STATE", std::ios::trunc);
+        out << "phase isolated\n";
+    }
+
+    {
+        KVStore recovered(dir);
+        std::string value;
+        expect_true(recovered.get("gc_state_key", value) && value == "stable_value",
+                    "incomplete GC restores old VLog before loading SST pointers");
+        expect_true(!std::filesystem::exists(dir + "/GC_STATE"),
+                    "incomplete GC state file removed after rollback");
+        expect_true(!std::filesystem::exists(dir + "/vlog_gc_target.bin"),
+                    "isolated GC target restored to active VLog");
+    }
+}
+
+static void test_gc_state_recovery_finalize(const std::string& dir) {
+    std::cout << "\n=== Test 31: VLog GC State Finalize Recovery ===\n";
+    clean_dir(dir);
+
+    {
+        KVStore store(dir);
+        store.put("gc_done_key", "done_value");
+        store.force_flush();
+    }
+
+    {
+        std::ofstream old(dir + "/vlog_gc_target.bin", std::ios::binary | std::ios::trunc);
+        old << "obsolete";
+    }
+    {
+        std::ofstream out(dir + "/GC_STATE", std::ios::trunc);
+        out << "phase rewrite_complete\n";
+    }
+
+    {
+        KVStore recovered(dir);
+        std::string value;
+        expect_true(recovered.get("gc_done_key", value) && value == "done_value",
+                    "completed GC state keeps active VLog readable");
+        expect_true(!std::filesystem::exists(dir + "/GC_STATE"),
+                    "completed GC state file removed after finalize");
+        expect_true(!std::filesystem::exists(dir + "/vlog_gc_target.bin"),
+                    "completed GC target deleted during recovery finalize");
+    }
+}
+
 // ── main ───────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -842,6 +901,8 @@ int main(int argc, char* argv[]) {
     test_l2_tombstone_experiment_regression();
     test_experiment_lab_script_metrics();
     test_dynamic_level_compaction_recovery(dir);
+    test_gc_state_recovery_rollback(dir);
+    test_gc_state_recovery_finalize(dir);
 
     clean_dir(dir);
     clean_dir("flsm_experiment_lab");

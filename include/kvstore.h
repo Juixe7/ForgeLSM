@@ -122,6 +122,7 @@ public:
 
 private:
     void     recover();
+    void     recover_incomplete_gc();
     void     load_sstables();
     void     scan_wal_files(std::vector<std::string>& paths, uint32_t& max_id) const;
     void     maybe_flush();
@@ -138,6 +139,7 @@ private:
 
     std::string manifest_path() const;
     std::string stats_path() const;
+    std::string gc_state_path() const;
 
     std::string wal_path(uint32_t id) const;
     std::string vlog_path() const;
