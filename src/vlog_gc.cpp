@@ -53,14 +53,11 @@ void run_vlog_gc(KVStore* store) {
         for (const auto& [k, v] : store->immutable_->entries()) process_entries(k, v);
     }
 
-    // C. L0 SSTables (Iterate 0 to N. l0_sstables_ is already kept newest-first!)
-    for (const auto& sst : store->l0_sstables_) {
-        for (const auto& e : sst.entries()) process_entries(e.key, e.pointer);
-    }
-
-    // D. L1 SSTables (Oldest level conceptually)
-    for (const auto& sst : store->l1_sstables_) {
-        for (const auto& e : sst.entries()) process_entries(e.key, e.pointer);
+    // C. SSTables by level. L0 is newest-first; deeper levels are older.
+    for (const auto& level : store->levels_sstables_) {
+        for (const auto& sst : level) {
+            for (const auto& e : sst.entries()) process_entries(e.key, e.pointer);
+        }
     }
 
     // 3. Rewrite Live Values

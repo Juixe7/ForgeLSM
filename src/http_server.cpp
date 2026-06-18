@@ -427,6 +427,16 @@ HttpResponse HttpServer::handle_lsm_state() {
     j << json_num ("l0_count",            static_cast<uint64_t>(l0));
     j << json_num ("l1_count",            static_cast<uint64_t>(l1));
     j << json_num ("l2_count",            static_cast<uint64_t>(l2));
+    j << json_num ("max_level",           static_cast<uint64_t>(store_.max_level()));
+    j << "  \"level_counts\": [";
+    for (size_t level = 0; level <= store_.max_level(); ++level) {
+        if (level) j << ",";
+        j << "{\"level\":" << level
+          << ",\"sstables\":" << store_.level_count(level)
+          << ",\"limit\":" << store_.level_hard_limit(level)
+          << "}";
+    }
+    j << "],\n";
     j << json_num ("l0_limit",            static_cast<uint64_t>(l0_limit));
     j << json_dbl ("l0_pressure_pct",     l0_pressure_pct);
     j << json_bool("wal_tainted",         tainted, true);
@@ -487,6 +497,16 @@ HttpResponse HttpServer::handle_debug_state() {
     j << json_num ("l0_count",            static_cast<uint64_t>(store_.l0_count()));
     j << json_num ("l1_count",            static_cast<uint64_t>(store_.l1_count()));
     j << json_num ("l2_count",            static_cast<uint64_t>(store_.l2_count()));
+    j << json_num ("max_level",           static_cast<uint64_t>(store_.max_level()));
+    j << "  \"level_counts\": [";
+    for (size_t level = 0; level <= store_.max_level(); ++level) {
+        if (level) j << ",";
+        j << "{\"level\":" << level
+          << ",\"sstables\":" << store_.level_count(level)
+          << ",\"limit\":" << store_.level_hard_limit(level)
+          << "}";
+    }
+    j << "],\n";
     j << json_bool("wal_tainted",         store_.wal_tainted());
     j << json_num ("wal_files",           wal_files);
     j << json_num ("wal_bytes",           wal_bytes);
@@ -559,9 +579,9 @@ HttpResponse HttpServer::handle_debug_files() {
     bool manifest_loaded = manifest.load(manifest_path.string());
     std::set<std::string> referenced_ssts;
     if (manifest_loaded) {
-        for (uint32_t seq : manifest.l0_seqs) referenced_ssts.insert(sst_name(seq));
-        for (uint32_t seq : manifest.l1_seqs) referenced_ssts.insert(sst_name(seq));
-        for (uint32_t seq : manifest.l2_seqs) referenced_ssts.insert(sst_name(seq));
+        for (size_t level = 0; level < manifest.level_count(); ++level) {
+            for (uint32_t seq : manifest.level(level)) referenced_ssts.insert(sst_name(seq));
+        }
     }
 
     std::vector<std::string> orphan_sst_rows;
@@ -606,14 +626,14 @@ HttpResponse HttpServer::handle_debug_files() {
     j << "],\n";
     j << "  \"sstables\": [";
     if (manifest_loaded) {
-        auto l0 = emit_sst_list(manifest.l0_seqs, "L0");
-        auto l1 = emit_sst_list(manifest.l1_seqs, "L1");
-        auto l2 = emit_sst_list(manifest.l2_seqs, "L2");
-        j << l0;
-        if (!l0.empty() && !l1.empty()) j << ",";
-        j << l1;
-        if ((!l0.empty() || !l1.empty()) && !l2.empty()) j << ",";
-        j << l2;
+        bool first_level = true;
+        for (size_t level = 0; level < manifest.level_count(); ++level) {
+            auto rows = emit_sst_list(manifest.level(level), "L" + std::to_string(level));
+            if (rows.empty()) continue;
+            if (!first_level) j << ",";
+            first_level = false;
+            j << rows;
+        }
     }
     j << "],\n";
     j << "  \"unreferenced_sstables\": [";

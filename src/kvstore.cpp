@@ -156,9 +156,7 @@ void KVStore::reset_store() {
     vlog_.reset();
     active_.reset();
     immutable_.reset();
-    l0_sstables_.clear();
-    l1_sstables_.clear();
-    l2_sstables_.clear();
+    levels_sstables_.clear();
     manifest_ = Manifest{};
     current_wal_id_ = 1;
     metrics_.reset();
@@ -245,44 +243,11 @@ bool KVStore::get(const std::string& key, std::string& out_value) const {
         return vlog_->read_at(ptr, out_value);
     }
 
-    // 3. L0 SSTables — newest first.
-    for (const auto& sst : l0_sstables_) {
-        metrics_.sst_considered++;
-        if (!disable_bloom_ && !sst.bloom().may_contain(key)) {
-            metrics_.bloom_skips++;
-            continue; // SKIP completely
-        }
-        
-        metrics_.sst_searches++; // Only count actual binary search checks
-        if (sst.get(key, ptr)) {
-            if (is_tombstone(ptr)) return false;
-            metrics_.vlog_reads++;
-            return vlog_->read_at(ptr, out_value);
-        }
-    }
+    // 3. SSTables — L0 newest-first, then older levels.
+    for (size_t level = 0; level < levels_sstables_.size(); ++level) {
+        for (const auto& sst : levels_sstables_[level]) {
+            if (level > 0 && !sst.overlaps(key, key)) continue;
 
-    // 4. L1 SSTables — binary search file boundaries.
-    for (const auto& sst : l1_sstables_) {
-        // Find the overlapping file:
-        if (sst.overlaps(key, key)) {
-            metrics_.sst_considered++;
-            if (!disable_bloom_ && !sst.bloom().may_contain(key)) {
-                metrics_.bloom_skips++;
-                continue; // SKIP completely
-            }
-            
-            metrics_.sst_searches++;
-            if (sst.get(key, ptr)) {
-                if (is_tombstone(ptr)) return false;
-                metrics_.vlog_reads++;
-                return vlog_->read_at(ptr, out_value);
-            }
-        }
-    }
-
-    // 5. L2 SSTables — colder compacted level.
-    for (const auto& sst : l2_sstables_) {
-        if (sst.overlaps(key, key)) {
             metrics_.sst_considered++;
             if (!disable_bloom_ && !sst.bloom().may_contain(key)) {
                 metrics_.bloom_skips++;
@@ -308,11 +273,19 @@ void KVStore::maybe_flush() {
     // Put() calls maybe_flush(), which directly and synchronously executes compaction 
     // when L0 threshold is exceeded. Because Phase 3 is explicitly single-threaded 
     // and holds no cross-thread locks, there is NO deadlock risk.
-    if (l1_sstables_.size() > options_.l1_hard_limit) {
-        compact_l1_to_l2();
+    bool compacted = true;
+    while (compacted) {
+        compacted = false;
+        for (size_t level = 1; level < levels_sstables_.size(); ++level) {
+            if (levels_sstables_[level].size() > level_hard_limit(level)) {
+                compact_level(level);
+                compacted = true;
+                break;
+            }
+        }
     }
-    if (l0_sstables_.size() > options_.l0_hard_limit) {
-        compact_l0_to_l1();
+    if (level_count(0) > options_.l0_hard_limit) {
+        compact_level(0);
     }
     if (!active_ || active_->byte_size() < options_.flush_threshold) return;
     flush();
@@ -341,7 +314,7 @@ void KVStore::flush() {
 
     // 3. Update manifest atomically. New SST forms L0 and is visible AFTER commit.
     manifest_.version++;
-    manifest_.l0_seqs.push_back(seq);
+    manifest_.ensure_level(0).push_back(seq);
     if (!manifest_.commit(manifest_path()))
         throw std::runtime_error("[KVStore] Manifest commit failed during flush");
     trace_event("manifest:commit", "L0 add seq=" + std::to_string(seq));
@@ -351,7 +324,8 @@ void KVStore::flush() {
     if (!reader.load(path))
         throw std::runtime_error("[KVStore] Failed to load flushed SSTable");
 
-    l0_sstables_.insert(l0_sstables_.begin(), std::move(reader));
+    if (levels_sstables_.empty()) levels_sstables_.resize(1);
+    levels_sstables_[0].insert(levels_sstables_[0].begin(), std::move(reader));
 
     // 5. WAL rotation (crash-safe: create-before-delete, I19).
     rotate_wal();
@@ -413,7 +387,14 @@ void KVStore::recover() {
     //   If SSTables exist → keep vlog (SST pointers reference it).
     //   If no SSTables    → safe to recreate vlog from WAL.
     auto vp = vlog_path();
-    if (l0_sstables_.empty() && l1_sstables_.empty() && l2_sstables_.empty()) {
+    bool has_sstables = false;
+    for (const auto& level : levels_sstables_) {
+        if (!level.empty()) {
+            has_sstables = true;
+            break;
+        }
+    }
+    if (!has_sstables) {
         std::error_code ec;
         std::filesystem::remove(vp, ec);
     }
@@ -460,8 +441,10 @@ void KVStore::recover() {
 
     std::cout << "[KVStore] Recovered " << total_entries << " entries from "
               << wal_files.size() << " WAL(s)";
-    if (!l0_sstables_.empty() || !l1_sstables_.empty() || !l2_sstables_.empty())
-        std::cout << ", loaded " << (l0_sstables_.size() + l1_sstables_.size() + l2_sstables_.size()) << " SSTables";
+    size_t loaded_sstables = 0;
+    for (const auto& level : levels_sstables_) loaded_sstables += level.size();
+    if (loaded_sstables > 0)
+        std::cout << ", loaded " << loaded_sstables << " SSTables";
     if (any_tainted)
         std::cout << " (WAL TAINTED)";
     std::cout << "\n";
@@ -470,9 +453,7 @@ void KVStore::recover() {
 // ── SSTable loading ────────────────────────────────────────────
 
 void KVStore::load_sstables() {
-    l0_sstables_.clear();
-    l1_sstables_.clear();
-    l2_sstables_.clear();
+    levels_sstables_.clear();
     if (!std::filesystem::exists(data_dir_)) return;
 
     if (!manifest_.load(manifest_path())) {
@@ -480,44 +461,42 @@ void KVStore::load_sstables() {
         return; // No manifest yet
     }
 
-    // Load L0 files. Reverse order since l0_seqs are appended in flush (oldest first).
-    // The vector l0_sstables_ must be newest-first for correct reading.
-    for (auto it = manifest_.l0_seqs.rbegin(); it != manifest_.l0_seqs.rend(); ++it) {
-        SSTableReader reader;
-        if (reader.load(sst_path(*it))) {
-            l0_sstables_.push_back(std::move(reader));
+    levels_sstables_.resize(manifest_.level_count());
+    for (size_t level = 0; level < manifest_.level_count(); ++level) {
+        const auto& seqs = manifest_.level(level);
+        if (level == 0) {
+            // L0 is append-ordered in the manifest, but must be searched newest-first.
+            for (auto it = seqs.rbegin(); it != seqs.rend(); ++it) {
+                SSTableReader reader;
+                if (reader.load(sst_path(*it))) {
+                    levels_sstables_[level].push_back(std::move(reader));
+                } else {
+                    std::cerr << "[KVStore] WARNING: Manifest invalid L" << level << " SSTable " << *it << "\n";
+                }
+            }
         } else {
-            std::cerr << "[KVStore] WARNING: Manifest invalid L0 SSTable " << *it << "\n";
-        }
-    }
-
-    // Load L1 files.
-    for (uint32_t seq : manifest_.l1_seqs) {
-        SSTableReader reader;
-        if (reader.load(sst_path(seq))) {
-            l1_sstables_.push_back(std::move(reader));
-        } else {
-            std::cerr << "[KVStore] WARNING: Manifest invalid L1 SSTable " << seq << "\n";
-        }
-    }
-
-    // Load L2 files.
-    for (uint32_t seq : manifest_.l2_seqs) {
-        SSTableReader reader;
-        if (reader.load(sst_path(seq))) {
-            l2_sstables_.push_back(std::move(reader));
-        } else {
-            std::cerr << "[KVStore] WARNING: Manifest invalid L2 SSTable " << seq << "\n";
+            for (uint32_t seq : seqs) {
+                SSTableReader reader;
+                if (reader.load(sst_path(seq))) {
+                    levels_sstables_[level].push_back(std::move(reader));
+                } else {
+                    std::cerr << "[KVStore] WARNING: Manifest invalid L" << level << " SSTable " << seq << "\n";
+                }
+            }
         }
     }
 }
 
 void KVStore::compact_l0_to_l1() {
-    run_compaction(this);
+    compact_level(0);
 }
 
 void KVStore::compact_l1_to_l2() {
-    run_l1_to_l2_compaction(this);
+    compact_level(1);
+}
+
+void KVStore::compact_level(size_t level) {
+    run_level_compaction(this, level);
 }
 
 // ── Diagnostics ────────────────────────────────────────────────
@@ -530,6 +509,19 @@ size_t KVStore::memtable_size() const {
 
 bool KVStore::wal_tainted() const {
     return wal_ && wal_->is_tainted();
+}
+
+size_t KVStore::level_hard_limit(size_t level) const {
+    if (level == 0) return options_.l0_hard_limit;
+    size_t limit = options_.l1_hard_limit;
+    size_t multiplier = options_.level_size_multiplier == 0 ? 1 : options_.level_size_multiplier;
+    for (size_t i = 1; i < level; ++i) {
+        if (limit > std::numeric_limits<size_t>::max() / multiplier) {
+            return std::numeric_limits<size_t>::max();
+        }
+        limit *= multiplier;
+    }
+    return limit;
 }
 
 StorageSummary KVStore::storage_summary() const {
@@ -549,9 +541,9 @@ StorageSummary KVStore::storage_summary() const {
     if (active_) add_entries(active_->entries());
     if (immutable_) add_entries(immutable_->entries());
 
-    for (const auto& sst : l0_sstables_) add_sstable(sst);
-    for (const auto& sst : l1_sstables_) add_sstable(sst);
-    for (const auto& sst : l2_sstables_) add_sstable(sst);
+    for (const auto& level : levels_sstables_) {
+        for (const auto& sst : level) add_sstable(sst);
+    }
 
     StorageSummary summary;
     for (const auto& [key, ptr] : newest) {

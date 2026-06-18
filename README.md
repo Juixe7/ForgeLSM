@@ -3,7 +3,7 @@
 **ForgeLSM is a C++20 WiscKey-style LSM key-value storage engine built from scratch for edge/IoT event storage experiments.**
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](#build)
-[![Tests](https://img.shields.io/badge/tests-62%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)](#testing)
 [![Docker](https://img.shields.io/badge/docker-ready-blue)](#docker)
 
 ForgeLSM separates small keys from larger values: keys, tombstones, and value pointers are indexed through an LSM tree, while event payloads are appended to a value log. The project is aimed at demonstrating how an embedded event store can survive restarts, compact old files, skip unnecessary reads with Bloom filters, and prove correctness through deterministic workloads.
@@ -11,7 +11,7 @@ ForgeLSM separates small keys from larger values: keys, tombstones, and value po
 ## Current Capabilities
 
 - Write-ahead log recovery with checksum validation and corrupt-tail truncation.
-- Memtable writes, flushes, SSTable files, Bloom filters, and manifest-tracked levels.
+- Memtable writes, flushes, SSTable files, Bloom filters, and dynamically tracked levels.
 - WiscKey-style value log storage for payload bytes.
 - L0 -> L1 -> L2 compaction with tombstone preservation for deleted keys.
 - Atomic SSTable commits using temp file write, fsync, and rename.
@@ -58,7 +58,7 @@ KVStore
 2. Append the key, value pointer, and tombstone flag to the WAL.
 3. Insert or overwrite the key in the memtable.
 4. When the memtable reaches its threshold, flush it to an SSTable.
-5. When level limits are reached, compact L0 into L1 and L1 into L2.
+5. When level limits are reached, compact L0 into L1, L1 into L2, and deeper levels as needed.
 
 ### Read Path
 
@@ -142,7 +142,7 @@ Experiment Lab uses smaller thresholds than production:
 - Memtable threshold: 32 KB.
 - L0 limit: 2 files.
 - L1 limit: 2 files.
-- Maximum implemented level: L2.
+- Dynamic compaction can create L3+ levels when explicitly forced or when deeper level limits are exceeded.
 
 This makes flushes and compactions visible with only a few thousand operations.
 
@@ -273,7 +273,7 @@ Run the binary without arguments to execute the built-in test suite:
 On the current codebase, the suite reports:
 
 ```text
-Results: 62 passed, 0 failed.
+Results: 70 passed, 0 failed.
 ```
 
 The tests cover:
@@ -284,7 +284,7 @@ The tests cover:
 - Flush and recovery cycles.
 - SSTable reads and multi-SSTable shadowing.
 - Tombstone correctness.
-- L0/L1/L2 compaction behavior.
+- Dynamic L0/L1/L2/L3+ compaction behavior.
 - Bloom filter correctness and checksum coverage.
 - Benchmark isolation.
 - Experiment Lab reference-model verification.
@@ -364,16 +364,14 @@ docker compose up -d
 
 ## Current Limits
 
-- Automatic level expansion beyond L2 is not implemented yet.
 - VLog garbage collection exists, but full crash-safe GC redesign is still future work.
 - MQTT-based ingestion is not implemented yet; current IoT streams are generated through the local HTTP API/server path.
 - The HTTP server is intentionally minimal and hand-written for learning; it is not a general-purpose production web framework.
 
 ## Future Work
 
-- Dynamic L3/L4/... level creation.
 - Fully crash-safe VLog GC.
 - MQTT ingestion for realistic IoT architecture.
 - Browser-visible granular engine trace logs.
-- More formal tests for dynamic levels, Stream 2 uniqueness math, and GC recovery.
+- More formal tests for Stream 2 uniqueness math and GC recovery.
 - README screenshots refreshed after the final UI settles.

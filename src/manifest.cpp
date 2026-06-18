@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <cstdlib>
 
 #ifdef _WIN32
   #include <io.h>
@@ -46,6 +47,16 @@ static bool write_all_m(int fd, const void* buf, size_t len) {
     return true;
 }
 
+std::vector<uint32_t>& Manifest::ensure_level(size_t level) {
+    if (levels.size() <= level) levels.resize(level + 1);
+    return levels[level];
+}
+
+const std::vector<uint32_t>& Manifest::level(size_t level) const {
+    static const std::vector<uint32_t> empty;
+    return level < levels.size() ? levels[level] : empty;
+}
+
 bool Manifest::load(const std::string& path) {
     if (!std::filesystem::exists(path)) return false;
 
@@ -57,31 +68,20 @@ bool Manifest::load(const std::string& path) {
     if (!(in >> token >> v) || token != "VERSION") return false;
     version = v;
 
-    l0_seqs.clear();
-    l1_seqs.clear();
-    l2_seqs.clear();
+    levels.clear();
 
     while (in >> token) {
-        if (token == "L0") {
+        if (token.size() >= 2 && token[0] == 'L') {
+            char* end = nullptr;
+            unsigned long level_id = std::strtoul(token.c_str() + 1, &end, 10);
+            if (!end || *end != '\0') return false;
             size_t count;
             if (!(in >> count)) return false;
+            auto& seqs = ensure_level(static_cast<size_t>(level_id));
             for (size_t i = 0; i < count; ++i) {
                 uint32_t seq;
-                if (in >> seq) l0_seqs.push_back(seq);
-            }
-        } else if (token == "L1") {
-            size_t count;
-            if (!(in >> count)) return false;
-            for (size_t i = 0; i < count; ++i) {
-                uint32_t seq;
-                if (in >> seq) l1_seqs.push_back(seq);
-            }
-        } else if (token == "L2") {
-            size_t count;
-            if (!(in >> count)) return false;
-            for (size_t i = 0; i < count; ++i) {
-                uint32_t seq;
-                if (in >> seq) l2_seqs.push_back(seq);
+                if (in >> seq) seqs.push_back(seq);
+                else return false;
             }
         }
     }
@@ -94,13 +94,11 @@ bool Manifest::commit(const std::string& path) const {
     // Generate manifest payload
     std::ostringstream oss;
     oss << "VERSION " << version << "\n";
-    oss << "L0 " << l0_seqs.size() << "\n";
-    for (uint32_t seq : l0_seqs) oss << seq << " ";
-    oss << "\nL1 " << l1_seqs.size() << "\n";
-    for (uint32_t seq : l1_seqs) oss << seq << " ";
-    oss << "\nL2 " << l2_seqs.size() << "\n";
-    for (uint32_t seq : l2_seqs) oss << seq << " ";
-    oss << "\n";
+    for (size_t level = 0; level < levels.size(); ++level) {
+        oss << "L" << level << " " << levels[level].size() << "\n";
+        for (uint32_t seq : levels[level]) oss << seq << " ";
+        oss << "\n";
+    }
 
     std::string payload = oss.str();
 

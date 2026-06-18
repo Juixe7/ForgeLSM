@@ -47,6 +47,7 @@ struct KVStoreOptions {
     size_t flush_threshold = 4u * 1024u * 1024u;
     size_t l0_hard_limit = 15;
     size_t l1_hard_limit = 12;
+    size_t level_size_multiplier = 10;
     bool trace_enabled = false;
     std::string trace_path;
 };
@@ -93,14 +94,19 @@ public:
     void subtract_user_bytes(uint64_t bytes);
 
     // ── Observability accessors (used by HttpServer) ──────────────
-    size_t l0_count()            const { return l0_sstables_.size(); }
-    size_t l1_count()            const { return l1_sstables_.size(); }
-    size_t l2_count()            const { return l2_sstables_.size(); }
+    size_t level_count(size_t level) const {
+        return level < levels_sstables_.size() ? levels_sstables_[level].size() : 0;
+    }
+    size_t max_level() const { return levels_sstables_.empty() ? 0 : levels_sstables_.size() - 1; }
+    size_t l0_count()            const { return level_count(0); }
+    size_t l1_count()            const { return level_count(1); }
+    size_t l2_count()            const { return level_count(2); }
     size_t active_byte_size()    const { return active_ ? active_->byte_size() : 0; }
     size_t memtable_entries()    const { return active_ ? active_->size() : 0; }
     size_t flush_threshold_bytes() const { return options_.flush_threshold; }
     size_t l0_hard_limit()       const { return options_.l0_hard_limit; }
     size_t l1_hard_limit()       const { return options_.l1_hard_limit; }
+    size_t level_hard_limit(size_t level) const;
     StorageSummary storage_summary() const;
 
     // Verification/admin hooks used by the local dashboard. These keep the
@@ -108,6 +114,7 @@ public:
     void force_flush() { flush(); }
     void force_compaction() { compact_l0_to_l1(); }
     void force_l1_compaction() { compact_l1_to_l2(); }
+    void force_level_compaction(size_t level) { compact_level(level); }
     void trace_event(const std::string& event, const std::string& detail) const;
     
     // Test helper to explicitly disable bloom filter and evaluate invariant equivalence
@@ -122,6 +129,7 @@ private:
     void     rotate_wal();
     void     compact_l0_to_l1();
     void     compact_l1_to_l2();
+    void     compact_level(size_t level);
     uint32_t next_sst_sequence() const;
     void     load_stats();
     void     persist_stats() const;
@@ -143,15 +151,14 @@ private:
     std::unique_ptr<Memtable>    active_;
     std::unique_ptr<Memtable>    immutable_;
     Manifest                     manifest_;
-    std::vector<SSTableReader>   l0_sstables_; // sorted newest-first
-    std::vector<SSTableReader>   l1_sstables_; // non-overlapping
-    std::vector<SSTableReader>   l2_sstables_; // colder non-overlapping run
+    std::vector<std::vector<SSTableReader>> levels_sstables_; // L0 newest-first, L1+ non-overlapping
     uint32_t                     current_wal_id_ = 1;
     bool                         disable_bloom_ = false;
     KVStoreOptions               options_;
 
     friend void run_compaction(KVStore* store);
     friend void run_l1_to_l2_compaction(KVStore* store);
+    friend void run_level_compaction(KVStore* store, size_t source_level);
     friend void run_vlog_gc(KVStore* store);
 };
 

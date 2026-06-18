@@ -739,6 +739,47 @@ static void test_experiment_lab_script_metrics() {
     expect_true(write_amp > 0.0, "experiment write amplification survives recover");
 }
 
+static void test_dynamic_level_compaction_recovery(const std::string& dir) {
+    std::cout << "\n=== Test 29: Dynamic Level Compaction Recovery ===\n";
+    clean_dir(dir);
+
+    KVStoreOptions options;
+    options.flush_threshold = 2048;
+    options.l0_hard_limit = 1;
+    options.l1_hard_limit = 1;
+
+    {
+        KVStore store(dir, options);
+        for (int batch = 0; batch < 4; ++batch) {
+            for (int i = 0; i < 120; ++i) {
+                int id = batch * 120 + i;
+                store.put("dyn_key_" + std::to_string(id), std::string(80, static_cast<char>('A' + batch)));
+            }
+            store.force_flush();
+        }
+
+        store.force_compaction();       // L0 -> L1
+        store.force_l1_compaction();    // L1 -> L2
+        store.force_level_compaction(2); // L2 -> L3
+
+        expect_true(store.max_level() >= 3, "dynamic compaction created an L3 level");
+        expect_true(store.level_count(3) > 0, "L3 contains compacted SSTables");
+
+        std::string value;
+        expect_true(store.get("dyn_key_0", value) && value == std::string(80, 'A'), "oldest dynamic-level key readable before recovery");
+        expect_true(store.get("dyn_key_479", value) && value == std::string(80, 'D'), "newest dynamic-level key readable before recovery");
+    }
+
+    {
+        KVStore recovered(dir, options);
+        std::string value;
+        expect_true(recovered.max_level() >= 3, "dynamic levels reload from manifest after recovery");
+        expect_true(recovered.level_count(3) > 0, "L3 SSTables reload after recovery");
+        expect_true(recovered.get("dyn_key_0", value) && value == std::string(80, 'A'), "oldest dynamic-level key readable after recovery");
+        expect_true(recovered.get("dyn_key_479", value) && value == std::string(80, 'D'), "newest dynamic-level key readable after recovery");
+    }
+}
+
 // ── main ───────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -800,6 +841,7 @@ int main(int argc, char* argv[]) {
     test_bloom_invariant_disabling(dir);
     test_l2_tombstone_experiment_regression();
     test_experiment_lab_script_metrics();
+    test_dynamic_level_compaction_recovery(dir);
 
     clean_dir(dir);
     clean_dir("flsm_experiment_lab");
