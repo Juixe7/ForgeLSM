@@ -286,6 +286,8 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/lsm-state") return handle_lsm_state();
         if (req.path == "/api/debug/state") return handle_debug_state();
         if (req.path == "/api/debug/files") return handle_debug_files();
+        if (req.path == "/api/trace/status") return handle_trace_status();
+        if (req.path == "/api/trace/read") return handle_trace_read();
         if (req.path == "/api/stream/status") return handle_stream_status();
     }
     if (req.method == "POST") {
@@ -295,6 +297,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
         if (req.path == "/api/bench")  return handle_bench(req);
         if (req.path == "/api/iot/bulk") return handle_iot_bulk(req);
         if (req.path == "/api/production/reset") return handle_production_reset();
+        if (req.path == "/api/trace/toggle") return handle_trace_toggle(req);
         if (req.path == "/api/stream/start") return handle_stream_start(req);
         if (req.path == "/api/stream2/start") return handle_stream_start(req);
         if (req.path == "/api/stream/stop") return handle_stream_stop();
@@ -653,6 +656,65 @@ HttpResponse HttpServer::handle_debug_files() {
     return resp;
 }
 
+HttpResponse HttpServer::handle_trace_status() {
+    std::lock_guard<std::mutex> guard(store_mutex_);
+    HttpResponse resp;
+    std::ostringstream j;
+    j << "{";
+    j << json_bool("enabled", store_.trace_enabled());
+    j << json_str("path", store_.trace_path(), true);
+    j << "}";
+    resp.body = j.str();
+    return resp;
+}
+
+HttpResponse HttpServer::handle_trace_toggle(const HttpRequest& req) {
+    bool enabled = json_get_int(req.body, "enabled", 0) != 0;
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        store_.set_trace_enabled(enabled);
+        store_.trace_event("trace:toggle", enabled ? "enabled" : "disabled");
+    }
+
+    HttpResponse resp;
+    resp.body = std::string("{") + json_bool("enabled", enabled, true) + "}";
+    return resp;
+}
+
+HttpResponse HttpServer::handle_trace_read() {
+    std::string path;
+    bool enabled = false;
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        path = store_.trace_path();
+        enabled = store_.trace_enabled();
+    }
+
+    std::deque<std::string> lines;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        lines.push_back(line);
+        while (lines.size() > 200) lines.pop_front();
+    }
+
+    std::ostringstream j;
+    j << "{\n";
+    j << json_bool("enabled", enabled);
+    j << json_str("path", path);
+    j << "  \"lines\": [";
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) j << ",";
+        j << "\"" << json_escape(lines[i]) << "\"";
+    }
+    j << "]\n";
+    j << "}";
+
+    HttpResponse resp;
+    resp.body = j.str();
+    return resp;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // POST /api/put  — {"key":"k","value":"v"}
 // ─────────────────────────────────────────────────────────────────
@@ -979,6 +1041,8 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
     std::filesystem::create_directories("iot_workloads");
     const std::string workload_path = (mode == "stream2")
         ? "iot_workloads/latest_production_stream2.jsonl"
+        : (mode == "mqtt")
+        ? "iot_workloads/latest_production_mqtt.jsonl"
         : "iot_workloads/latest_production_stream.jsonl";
     std::ofstream workload_file(workload_path, std::ios::trunc);
     std::vector<std::string> live_telemetry_keys;
@@ -999,16 +1063,27 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
         uint64_t device = (mode == "stream2")
             ? stream2_device_for_operation(i, op_bucket, devices)
             : (i % devices);
+        if (mode == "mqtt") {
+            device = ((i / 10) * 19 + op_bucket * 11 + 3) % devices;
+        }
         std::string op;
         std::string key;
         std::string value;
+        std::string topic;
         bool mismatch = false;
 
         if (op_bucket < 80) {
             op = "put";
-            key = "iot:device_" + std::to_string(device) + ":telemetry:" + std::to_string(i);
+            topic = (mode == "mqtt")
+                ? "factory/site_a/device/" + std::to_string(device) + "/telemetry"
+                : "";
+            key = (mode == "mqtt")
+                ? "mqtt:" + topic + ":" + std::to_string(i)
+                : "iot:device_" + std::to_string(device) + ":telemetry:" + std::to_string(i);
             std::ostringstream payload;
-            payload << "{\"device_id\":\"device_" << device
+            payload << "{\"protocol\":\"" << (mode == "mqtt" ? "mqtt" : "http-stream")
+                    << "\",\"topic\":\"" << topic
+                    << "\",\"device_id\":\"device_" << device
                     << "\",\"sequence\":" << i
                     << ",\"op\":\"telemetry\","
                     << "\"temperature_c\":" << std::fixed << std::setprecision(2)
@@ -1021,7 +1096,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
                 std::lock_guard<std::mutex> guard(store_mutex_);
                 store_.put(key, value);
             }
-            if (mode == "stream2") live_telemetry_keys.push_back(key);
+            if (mode == "stream2" || mode == "mqtt") live_telemetry_keys.push_back(key);
             {
                 std::lock_guard<std::mutex> guard(stream_mutex_);
                 stream_puts_++;
@@ -1029,10 +1104,17 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
             }
         } else if (op_bucket < 90) {
             op = "update";
-            if (mode == "stream2") {
+            if (mode == "stream2" || mode == "mqtt") {
                 const std::string family = stream2_state_family(i, op_bucket);
-                key = "iot:device_" + std::to_string(device) + ":" + family;
-                value = "{\"device_id\":\"device_" + std::to_string(device) +
+                topic = (mode == "mqtt")
+                    ? "factory/site_a/device/" + std::to_string(device) + "/state/" + family
+                    : "";
+                key = (mode == "mqtt")
+                    ? "mqtt:" + topic
+                    : "iot:device_" + std::to_string(device) + ":" + family;
+                value = "{\"protocol\":\"" + std::string(mode == "mqtt" ? "mqtt" : "http-stream") +
+                        "\",\"topic\":\"" + topic +
+                        "\",\"device_id\":\"device_" + std::to_string(device) +
                         "\",\"op\":\"state_update\",\"field\":\"" + family +
                         "\",\"version\":" + std::to_string(i / 100) +
                         ",\"value\":" + std::to_string(100 + ((i * 17) % 900)) + "}";
@@ -1050,12 +1132,12 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
             {
                 std::lock_guard<std::mutex> guard(stream_mutex_);
                 stream_updates_++;
-                if (mode == "stream2") stream_unique_state_ = static_cast<uint64_t>(unique_state_keys.size());
+                if (mode == "stream2" || mode == "mqtt") stream_unique_state_ = static_cast<uint64_t>(unique_state_keys.size());
             }
         } else if (op_bucket < 95) {
             op = "delete";
             bool deleted_existing = false;
-            if (mode == "stream2") {
+            if (mode == "stream2" || mode == "mqtt") {
                 if (!live_telemetry_keys.empty()) {
                     size_t idx = static_cast<size_t>((i * 1103515245ULL + 12345ULL) % live_telemetry_keys.size());
                     key = live_telemetry_keys[idx];
@@ -1080,7 +1162,9 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
             }
         } else {
             op = "get";
-            key = (mode == "stream2")
+            key = (mode == "mqtt")
+                ? "mqtt:factory/site_a/device/" + std::to_string(device) + "/state/status:health"
+                : (mode == "stream2")
                 ? "iot:device_" + std::to_string(device) + ":status:health"
                 : "iot:device_" + std::to_string(device) + ":config";
             std::string actual;
@@ -1096,6 +1180,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
 
         if (workload_file) {
             workload_file << "{\"op\":\"" << op << "\",\"key\":\"" << json_escape(key) << "\"";
+            if (!topic.empty()) workload_file << ",\"topic\":\"" << json_escape(topic) << "\"";
             if (!value.empty()) workload_file << ",\"value\":\"" << json_escape(value) << "\"";
             workload_file << "}\n";
         }
@@ -1106,7 +1191,7 @@ void HttpServer::run_stream_worker(uint64_t operations, uint64_t devices, const 
             if (mismatch) stream_mismatches_++;
         }
 
-        append_stream_log(mode + ":" + op + " | key=" + key);
+        append_stream_log(mode + ":" + op + " | " + (topic.empty() ? "key=" + key : "topic=" + topic + " key=" + key));
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -1129,7 +1214,7 @@ HttpResponse HttpServer::handle_stream_start(const HttpRequest& req) {
     uint64_t operations = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "operations", 10000), 100LL, 500000LL));
     uint64_t devices = static_cast<uint64_t>(std::clamp(json_get_int(req.body, "devices", 100), 1LL, 5000LL));
     std::string mode = json_get_str(req.body, "mode");
-    if (mode != "stream2") mode = (req.path == "/api/stream2/start") ? "stream2" : "stream1";
+    if (mode != "stream2" && mode != "mqtt") mode = (req.path == "/api/stream2/start") ? "stream2" : "stream1";
 
     if (stream_thread_.joinable()) stream_thread_.join();
 

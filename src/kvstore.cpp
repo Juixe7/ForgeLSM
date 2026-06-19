@@ -610,3 +610,12 @@ void KVStore::trace_event(const std::string& event, const std::string& detail) c
     if (!out) return;
     out << event << " | " << detail << "\n";
 }
+
+void KVStore::set_trace_enabled(bool enabled) {
+    options_.trace_enabled = enabled;
+    if (options_.trace_path.empty()) options_.trace_path = data_dir_ + "/engine_trace.log";
+    if (enabled) {
+        std::ofstream out(options_.trace_path, std::ios::app);
+        if (out) out << "[trace] enabled store dir=" << data_dir_ << "\n";
+    }
+}

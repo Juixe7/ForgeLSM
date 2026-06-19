@@ -174,7 +174,8 @@ pre {
 .workload-panel,
 .raw-panel,
 .evidence-panel,
-.trace-panel {
+.trace-panel,
+.terminal-panel {
   grid-column: span 1;
 }
 
@@ -437,7 +438,8 @@ button:disabled {
 }
 
 #prod-raw,
-#experiment-raw {
+#experiment-raw,
+#engine-terminal {
   min-height: 360px;
   max-height: 560px;
   overflow: auto;
@@ -449,6 +451,12 @@ button:disabled {
   color: #c8d3df;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+#engine-terminal {
+  min-height: 300px;
+  max-height: 420px;
+  color: #b8f2d0;
 }
 
 .status-chip {

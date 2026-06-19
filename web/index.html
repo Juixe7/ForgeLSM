@@ -75,6 +75,7 @@
               <select id="stream-mode">
                 <option value="stream1" selected>Stream 1</option>
                 <option value="stream2">Stream 2</option>
+                <option value="mqtt">MQTT-style</option>
               </select>
             </label>
             <label>
@@ -177,6 +178,20 @@
           <div class="step-list" id="prod-trace">
             <div class="empty-state">Run a production workload to see the trace.</div>
           </div>
+        </section>
+
+        <section class="audit-panel terminal-panel">
+          <div class="panel-title-row">
+            <div>
+              <h1>Engine Terminal Log</h1>
+              <p>Verbose engine events from WAL, VLog, memtable, flush, compaction, and recovery paths.</p>
+            </div>
+            <div class="button-row">
+              <button class="secondary-btn" id="trace-toggle">Enable Trace</button>
+              <button class="secondary-btn" id="trace-refresh">Refresh Log</button>
+            </div>
+          </div>
+          <pre id="engine-terminal">Trace disabled or no entries yet.</pre>
         </section>
       </div>
     </section>

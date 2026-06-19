@@ -116,6 +116,9 @@ public:
     void force_l1_compaction() { compact_l1_to_l2(); }
     void force_level_compaction(size_t level) { compact_level(level); }
     void trace_event(const std::string& event, const std::string& detail) const;
+    void set_trace_enabled(bool enabled);
+    bool trace_enabled() const { return options_.trace_enabled; }
+    std::string trace_path() const { return options_.trace_path; }
     
     // Test helper to explicitly disable bloom filter and evaluate invariant equivalence
     void bypass_bloom(bool bypass) { disable_bloom_ = bypass; }

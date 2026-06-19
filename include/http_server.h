@@ -122,6 +122,9 @@ private:
     HttpResponse handle_lsm_state();
     HttpResponse handle_debug_state();
     HttpResponse handle_debug_files();
+    HttpResponse handle_trace_status();
+    HttpResponse handle_trace_read();
+    HttpResponse handle_trace_toggle(const HttpRequest& req);
     HttpResponse handle_put(const HttpRequest& req);
     HttpResponse handle_get(const HttpRequest& req);
     HttpResponse handle_delete(const HttpRequest& req);

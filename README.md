@@ -18,6 +18,8 @@ ForgeLSM separates small keys from larger values: keys, tombstones, and value po
 - Atomic SSTable commits using temp file write, fsync, and rename.
 - Persistent production statistics in a `STATS` file.
 - Production IoT stream generator with mixed puts, updates, deletes, and gets.
+- MQTT-style IoT simulator mode with topic-shaped payloads through the production stream path.
+- Browser-visible verbose engine trace console for WAL, VLog, memtable, flush, compaction, and recovery events.
 - Experiment Lab that runs scripted workloads against an in-memory reference model.
 - Minimal raw C++ HTTP server and browser UI served from the same binary.
 
@@ -123,8 +125,10 @@ Main controls:
 
 - Run Stream 1: original deterministic mixed IoT workload.
 - Run Stream 2: improved mixed workload with wider key distribution and more realistic updates/deletes.
+- Run MQTT-style: topic/payload-shaped device messages that mimic MQTT ingestion semantics while still using the local engine API.
 - Stop Stream: stop a running stream.
 - Reset Store: remove production data and start clean.
+- Engine Terminal Log: enable or disable verbose engine tracing and inspect the latest engine-level events.
 
 Main evidence shown:
 
@@ -208,6 +212,8 @@ GET /api/metrics
 GET /api/lsm-state
 GET /api/debug/state
 GET /api/debug/files
+GET /api/trace/status
+GET /api/trace/read
 GET /api/stream/status
 ```
 
@@ -220,6 +226,7 @@ POST /api/delete
 POST /api/bench
 POST /api/iot/bulk
 POST /api/production/reset
+POST /api/trace/toggle
 POST /api/stream/start
 POST /api/stream2/start
 POST /api/stream/stop
@@ -368,13 +375,11 @@ docker compose up -d
 ## Current Limits
 
 - VLog GC is crash-aware through `GC_STATE`, but still runs synchronously and uses a single active VLog file.
-- MQTT-based ingestion is not implemented yet; current IoT streams are generated through the local HTTP API/server path.
+- MQTT-style ingestion is simulated inside the local production stream path, not through an external MQTT broker yet.
 - The HTTP server is intentionally minimal and hand-written for learning; it is not a general-purpose production web framework.
 
 ## Future Work
 
 - Multi-file VLog generations with richer GC metadata.
-- MQTT ingestion for realistic IoT architecture.
-- Browser-visible granular engine trace logs.
-- MQTT ingestion for realistic IoT architecture.
+- External MQTT broker/client integration for realistic network ingestion.
 - README screenshots refreshed after the final UI settles.

@@ -9,6 +9,9 @@ const els = {
   resetProduction: document.getElementById('reset-production'),
   prodRaw: document.getElementById('prod-raw'),
   prodTrace: document.getElementById('prod-trace'),
+  traceToggle: document.getElementById('trace-toggle'),
+  traceRefresh: document.getElementById('trace-refresh'),
+  engineTerminal: document.getElementById('engine-terminal'),
   streamStart: document.getElementById('stream-start'),
   streamStop: document.getElementById('stream-stop'),
   streamMode: document.getElementById('stream-mode'),
@@ -176,7 +179,7 @@ function renderStreamStatus(status) {
     `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`
   );
   setText('stream-file', status.workload_file || '-');
-  setText('last-mode', status.mode === 'stream2' ? 'Stream 2' : 'Stream 1');
+  setText('last-mode', status.mode === 'mqtt' ? 'MQTT-style' : (status.mode === 'stream2' ? 'Stream 2' : 'Stream 1'));
   setText('last-completed', `${fmtNum(status.completed_operations)} / ${fmtNum(status.target_operations)} ops`);
   setText('last-mix', `P ${fmtNum(status.puts)} / U ${fmtNum(status.updates)} / D ${fmtNum(status.deletes)} / G ${fmtNum(status.gets)}`);
   setText('last-unique-telemetry', fmtNum(status.unique_telemetry_keys));
@@ -256,6 +259,38 @@ async function resetProductionStore() {
     renderTrace([{phase: 'reset-error', detail: err.message}]);
   } finally {
     els.resetProduction.disabled = false;
+  }
+}
+
+function renderEngineTerminal(trace) {
+  const lines = Array.isArray(trace.lines) ? trace.lines : [];
+  els.traceToggle.textContent = trace.enabled ? 'Disable Trace' : 'Enable Trace';
+  els.traceToggle.classList.toggle('primary-btn', Boolean(trace.enabled));
+  els.traceToggle.classList.toggle('secondary-btn', !trace.enabled);
+  els.engineTerminal.textContent = lines.length
+    ? lines.join('\n')
+    : (trace.enabled ? 'Trace enabled. Run operations to produce engine events.' : 'Trace disabled or no entries yet.');
+  els.engineTerminal.scrollTop = els.engineTerminal.scrollHeight;
+}
+
+async function refreshEngineTrace() {
+  try {
+    renderEngineTerminal(await getJson('/api/trace/read'));
+  } catch (err) {
+    els.engineTerminal.textContent = `trace-error | ${err.message}`;
+  }
+}
+
+async function toggleEngineTrace() {
+  const currentlyEnabled = els.traceToggle.textContent.toLowerCase().includes('disable');
+  els.traceToggle.disabled = true;
+  try {
+    await postJson('/api/trace/toggle', {enabled: currentlyEnabled ? 0 : 1});
+    await refreshEngineTrace();
+  } catch (err) {
+    els.engineTerminal.textContent = `trace-toggle-error | ${err.message}`;
+  } finally {
+    els.traceToggle.disabled = false;
   }
 }
 
@@ -360,13 +395,17 @@ els.refreshState.addEventListener('click', () => refreshState(true));
 els.resetProduction.addEventListener('click', resetProductionStore);
 els.streamStart.addEventListener('click', startStream);
 els.streamStop.addEventListener('click', stopStream);
+els.traceToggle.addEventListener('click', toggleEngineTrace);
+els.traceRefresh.addEventListener('click', refreshEngineTrace);
 els.experimentRun.addEventListener('click', runExperiment);
 els.experimentBasic.addEventListener('click', () => setExperimentPreset('basic'));
 els.experimentLsm.addEventListener('click', () => setExperimentPreset('lsm'));
 
 refreshState();
 refreshStreamStatus();
+refreshEngineTrace();
 setInterval(() => {
   refreshState(false);
   refreshStreamStatus();
+  refreshEngineTrace();
 }, POLL_INTERVAL_MS);
