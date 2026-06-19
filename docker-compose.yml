@@ -19,6 +19,14 @@ services:
       retries: 3
       start_period: 5s
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: forgelsm-mqtt-broker
+    ports:
+      - "1883:1883"
+    command: mosquitto -c /mosquitto-no-auth.conf
+    restart: unless-stopped
+
 volumes:
   forgelsm_data:
     driver: local

@@ -19,6 +19,7 @@ ForgeLSM separates small keys from larger values: keys, tombstones, and value po
 - Persistent production statistics in a `STATS` file.
 - Production IoT stream generator with mixed puts, updates, deletes, and gets.
 - MQTT-style IoT simulator mode with topic-shaped payloads through the production stream path.
+- External MQTT broker bridge tooling for realistic broker -> ingestion -> ForgeLSM demos.
 - Browser-visible verbose engine trace console for WAL, VLog, memtable, flush, compaction, and recovery events.
 - Experiment Lab that runs scripted workloads against an in-memory reference model.
 - Minimal raw C++ HTTP server and browser UI served from the same binary.
@@ -233,6 +234,90 @@ POST /api/stream/stop
 POST /api/experiment/run
 ```
 
+## External MQTT Broker Integration
+
+ForgeLSM also includes optional Python tooling for a real MQTT broker flow:
+
+```text
+MQTT devices/publisher
+   |
+   v
+External MQTT broker, for example Mosquitto on port 1883
+   |
+   v
+tools/mqtt_bridge.py
+   |
+   v
+ForgeLSM HTTP API on http://localhost:8080
+   |
+   v
+KVStore, WAL, Memtable, SSTables, VLog
+```
+
+The bridge is intentionally outside the C++ engine. That keeps the storage
+engine focused on database behavior while still demonstrating realistic IoT
+ingestion through MQTT.
+
+Install the MQTT Python dependency:
+
+```powershell
+python -m pip install -r requirements-mqtt.txt
+```
+
+Start ForgeLSM:
+
+```powershell
+.\flsm.exe web 8080
+```
+
+Start a local Mosquitto broker with Docker:
+
+```powershell
+docker run --rm -it -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+```
+
+Start the MQTT bridge:
+
+```powershell
+python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --verbose
+```
+
+Publish deterministic IoT traffic:
+
+```powershell
+python tools\mqtt_publisher.py --broker localhost --events 10000 --devices 100
+```
+
+The publisher emits a deterministic mix:
+
+```text
+80% telemetry puts      -> unique event keys
+10% state updates       -> stable per-device state keys
+5% deletes              -> tombstones for earlier telemetry keys
+5% gets                 -> read checks through the bridge
+```
+
+The MQTT bridge maps messages like this:
+
+```text
+factory/<site>/device/<id>/telemetry   -> POST /api/put with a unique key
+factory/<site>/device/<id>/state/...   -> POST /api/put with a stable update key
+factory/<site>/device/<id>/delete      -> POST /api/delete
+factory/<site>/device/<id>/query       -> POST /api/get
+```
+
+Docker Compose starts both ForgeLSM and a local Mosquitto broker:
+
+```powershell
+docker compose up -d
+```
+
+When Compose is used, run the Python bridge on the host with:
+
+```powershell
+python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080
+```
+
 Older fixed verification endpoints are still present for compatibility:
 
 ```text
@@ -308,6 +393,7 @@ src/                     Engine, HTTP server, CLI, benchmark, and lab code
 web/                     Browser UI: HTML, CSS, and JavaScript
 assets/                  Architecture diagrams
 docs/                    Design notes and project planning docs
+tools/                   External MQTT bridge and publisher scripts
 main.cpp                 Test runner and program entry point
 Makefile                 Local build recipe
 Dockerfile               Container build
@@ -375,11 +461,11 @@ docker compose up -d
 ## Current Limits
 
 - VLog GC is crash-aware through `GC_STATE`, but still runs synchronously and uses a single active VLog file.
-- MQTT-style ingestion is simulated inside the local production stream path, not through an external MQTT broker yet.
+- External MQTT is implemented as Python bridge tooling; the C++ engine itself still exposes HTTP instead of embedding a native MQTT client.
 - The HTTP server is intentionally minimal and hand-written for learning; it is not a general-purpose production web framework.
 
 ## Future Work
 
 - Multi-file VLog generations with richer GC metadata.
-- External MQTT broker/client integration for realistic network ingestion.
+- Native C++ MQTT client integration, if the project later needs broker ingestion inside the engine binary.
 - README screenshots refreshed after the final UI settles.
