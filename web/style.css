@@ -375,6 +375,10 @@ button:disabled {
   gap: 14px;
 }
 
+.level-map-table {
+  margin-top: 14px;
+}
+
 .warning-row td {
   color: var(--amber);
 }

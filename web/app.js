@@ -90,12 +90,28 @@ function renderSystem(metrics, lsm, debug) {
   setText('state-l0', `${fmtNum(lsm.l0_count)} / ${fmtNum(lsm.l0_limit)} files`);
   setText('state-l1', `${fmtNum(lsm.l1_count)} files`);
   setText('state-l2', `${fmtNum(lsm.l2_count)} files`);
+  setText('state-max-level', `L${fmtNum(lsm.max_level || 0)}`);
   setText('state-wal', debug.wal_tainted ? 'TAINTED' : `Clean, ${fmtNum(debug.wal_files)} file(s), ${fmtBytes(debug.wal_bytes)}`);
   setText('state-total-disk', fmtBytes(debug.total_disk_bytes));
   setText('state-live-logical', fmtBytes(debug.live_logical_bytes_estimate));
   setText('state-live-keys', fmtNum(debug.live_keys_estimate));
   setText('state-tombstones', fmtNum(debug.tombstones_estimate));
   setText('state-space-amp', `${Number(debug.space_amplification_estimate || 0).toFixed(2)}x`);
+
+  const levelCounts = Array.isArray(lsm.level_counts) && lsm.level_counts.length
+    ? lsm.level_counts
+    : [
+        {level: 0, sstables: lsm.l0_count || 0, limit: lsm.l0_limit || 0},
+        {level: 1, sstables: lsm.l1_count || 0, limit: 0},
+        {level: 2, sstables: lsm.l2_count || 0, limit: 0},
+      ];
+  byId('level-map-body').innerHTML = levelCounts.map((level) => {
+    const count = Number(level.sstables || 0);
+    const limit = Number(level.limit || 0);
+    const pressure = limit > 0 ? `${((count / limit) * 100).toFixed(1)}%` : '-';
+    const className = limit > 0 && count > limit ? ' class="warning-row"' : '';
+    return `<tr${className}><td>L${fmtNum(level.level)}</td><td>${fmtNum(count)}</td><td>${limit > 0 ? fmtNum(limit) : '-'}</td><td>${pressure}</td></tr>`;
+  }).join('');
 }
 
 function renderStorage(files) {

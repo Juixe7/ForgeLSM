@@ -52,6 +52,7 @@
               <tr><th>L0 SSTables</th><td id="state-l0">-</td></tr>
               <tr><th>L1 SSTables</th><td id="state-l1">-</td></tr>
               <tr><th>L2 SSTables</th><td id="state-l2">-</td></tr>
+              <tr><th>Highest level</th><td id="state-max-level">-</td></tr>
               <tr><th>WAL status</th><td id="state-wal">-</td></tr>
               <tr><th>Total disk bytes</th><td id="state-total-disk">-</td></tr>
               <tr><th>Live logical bytes</th><td id="state-live-logical">-</td></tr>
@@ -156,6 +157,13 @@
               </tbody>
             </table>
           </div>
+          <table class="audit-table level-map-table">
+            <caption>Dynamic Level Map</caption>
+            <thead><tr><th>Level</th><th>SSTables</th><th>Limit</th><th>Pressure</th></tr></thead>
+            <tbody id="level-map-body">
+              <tr><td colspan="4">Loading...</td></tr>
+            </tbody>
+          </table>
         </section>
 
         <section class="audit-panel raw-panel">
