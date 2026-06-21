@@ -129,13 +129,17 @@ Main controls:
 - Run MQTT-style: topic/payload-shaped device messages that mimic MQTT ingestion semantics while still using the local engine API.
 - Stop Stream: stop a running stream.
 - Reset Store: remove production data and start clean.
+- Production Query Console: manually run `get`, `put`, and `del` against the production store.
 - Engine Terminal Log: enable or disable verbose engine tracing and inspect the latest engine-level events.
 
 Main evidence shown:
 
-- Last run result: operations requested, operations completed, logical bytes, physical bytes, and trace.
+- Built-in stream result: operations requested, operations completed, logical bytes, and physical bytes for UI-started streams.
 - Current database state: memtable entries, WAL size, SSTable counts, VLog size, live keys, tombstones, disk usage, and amplification estimates.
 - Storage internals: manifest state, SSTable levels, WAL files, and VLog bytes.
+- Production query output: manual proof that MQTT or stream keys can be read and deleted.
+
+The web production store uses a 1 MB memtable flush threshold so SSTables appear quickly during demonstrations.
 
 ### Experiment Lab
 
@@ -282,10 +286,18 @@ Start the MQTT bridge:
 python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --verbose
 ```
 
+The bridge prints an MQTT summary and a ForgeLSM database summary when it exits. Stop it with Ctrl+C after a live demo, or pass `--limit <n>` when you know how many MQTT messages will be published.
+
 Publish deterministic IoT traffic:
 
 ```powershell
 python tools\mqtt_publisher.py --broker localhost --events 10000 --devices 100
+```
+
+Publish live random IoT traffic until Ctrl+C:
+
+```powershell
+python tools\mqtt_publisher.py --broker localhost --devices 100 --live --random --rate 200
 ```
 
 The publisher emits a deterministic mix:
@@ -316,6 +328,14 @@ When Compose is used, run the Python bridge on the host with:
 
 ```powershell
 python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080
+```
+
+Manual production query examples for the browser console:
+
+```text
+get mqtt:factory/site_a/device/dev_0001/telemetry:1
+del mqtt:factory/site_a/device/dev_0001/telemetry:1
+put demo:key hello
 ```
 
 Older fixed verification endpoints are still present for compatibility:

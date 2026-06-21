@@ -111,8 +111,8 @@
         <section class="audit-panel workload-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Last Run Result</h1>
-              <p>Only the most recent stream run, measured from its start point.</p>
+              <h1>Built-in Stream Result</h1>
+              <p>Only the most recent UI-started stream run, measured from its start point.</p>
             </div>
           </div>
           <table class="audit-table">
@@ -166,25 +166,38 @@
           </table>
         </section>
 
-        <section class="audit-panel raw-panel">
+        <section class="audit-panel query-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Production Evidence</h1>
-              <p>Latest production state or workload result.</p>
+              <h1>Production Query Console</h1>
+              <p>Manually verify keys that entered through MQTT, streams, or direct writes.</p>
             </div>
           </div>
-          <pre id="prod-raw">{}</pre>
+          <textarea id="prod-command" spellcheck="false" placeholder="get mqtt:factory/site_a/device/dev_0001/telemetry:1"></textarea>
+          <div class="control-row query-actions">
+            <button class="primary-btn" id="prod-run-command">Run Command</button>
+            <button class="secondary-btn" id="prod-sample-get">Sample MQTT Get</button>
+            <button class="secondary-btn" id="prod-clear-output">Clear Output</button>
+          </div>
+          <pre id="prod-query-output">Run get, put, or del commands to prove production data is queryable.</pre>
         </section>
 
-        <section class="audit-panel trace-panel">
+        <section class="audit-panel mqtt-panel">
           <div class="panel-title-row">
             <div>
-              <h1>Operation Trace</h1>
-              <p>Compact background trace from the latest production workload.</p>
+              <h1>External MQTT Demo</h1>
+              <p>Use a real broker and bridge process for the professor demo.</p>
             </div>
           </div>
-          <div class="step-list" id="prod-trace">
-            <div class="empty-state">Run a production workload to see the trace.</div>
+          <div class="command-card">
+            <div>1. Start broker</div>
+            <code>docker compose up -d mosquitto</code>
+            <div>2. Start bridge</div>
+            <code>python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --verbose</code>
+            <div>3. Publish finite workload</div>
+            <code>python tools\mqtt_publisher.py --broker localhost --events 10000 --devices 100</code>
+            <div>4. Or publish live random traffic</div>
+            <code>python tools\mqtt_publisher.py --broker localhost --devices 100 --live --random --rate 200</code>
           </div>
         </section>
 

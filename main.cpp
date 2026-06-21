@@ -898,7 +898,9 @@ int main(int argc, char* argv[]) {
         std::cout << "  │  WiscKey-style LSM storage engine   │\n";
         std::cout << "  ╰───────────────────────────────────╯\n";
         std::cout << "\n";
-        KVStore store("flsm_production");
+        KVStoreOptions options;
+        options.flush_threshold = 1u * 1024u * 1024u;
+        KVStore store("flsm_production", options);
         HttpServer server(store, port);
         server.run();
         return 0;

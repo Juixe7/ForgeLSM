@@ -7,8 +7,11 @@ const els = {
   statusText: document.getElementById('status-text'),
   refreshState: document.getElementById('refresh-state'),
   resetProduction: document.getElementById('reset-production'),
-  prodRaw: document.getElementById('prod-raw'),
-  prodTrace: document.getElementById('prod-trace'),
+  prodCommand: document.getElementById('prod-command'),
+  prodRunCommand: document.getElementById('prod-run-command'),
+  prodSampleGet: document.getElementById('prod-sample-get'),
+  prodClearOutput: document.getElementById('prod-clear-output'),
+  prodQueryOutput: document.getElementById('prod-query-output'),
   traceToggle: document.getElementById('trace-toggle'),
   traceRefresh: document.getElementById('trace-refresh'),
   engineTerminal: document.getElementById('engine-terminal'),
@@ -67,7 +70,7 @@ function setConnected(ok, message) {
 }
 
 async function getJson(path) {
-  const response = await fetch(path);
+  const response = await fetch(path, {cache: 'no-store'});
   if (!response.ok) throw new Error(`${path} returned ${response.status}`);
   return response.json();
 }
@@ -75,6 +78,7 @@ async function getJson(path) {
 async function postJson(path, body) {
   const response = await fetch(path, {
     method: 'POST',
+    cache: 'no-store',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {}),
   });
@@ -143,10 +147,10 @@ function renderStorage(files) {
 
   byId('sstable-body').innerHTML = rows.length
     ? rows.join('')
-    : '<tr><td colspan="4">No production SSTables yet. Run a large production workload to cross the 4 MB flush threshold.</td></tr>';
+    : '<tr><td colspan="4">No production SSTables yet. Run enough production or MQTT data to cross the 1 MB flush threshold.</td></tr>';
 }
 
-async function refreshState(writeRaw = true) {
+async function refreshState() {
   try {
     const [metrics, lsm, debug, files] = await Promise.all([
       getJson('/api/metrics'),
@@ -157,9 +161,6 @@ async function refreshState(writeRaw = true) {
     setConnected(true);
     renderSystem(metrics, lsm, debug);
     renderStorage(files);
-    if (writeRaw) {
-      els.prodRaw.textContent = JSON.stringify({metrics, lsm_state: lsm, debug_state: debug, files}, null, 2);
-    }
   } catch (err) {
     setConnected(false, err.message);
   }
@@ -171,19 +172,12 @@ function statusClass(status) {
   return 'pending';
 }
 
-function renderTrace(trace) {
-  const rows = Array.isArray(trace) ? trace : [];
-  els.prodTrace.innerHTML = rows.length
-    ? rows.map((entry) => `
-        <div class="step-row pass">
-          <div class="step-status">${escapeHtml(entry.phase || 'trace')}</div>
-          <div>
-            <div class="step-name">${escapeHtml(entry.phase || 'operation')}</div>
-            <div class="step-detail">${escapeHtml(entry.detail || '')}</div>
-          </div>
-        </div>
-      `).join('')
-    : '<div class="empty-state">No trace entries returned.</div>';
+function appendProductionOutput(line) {
+  const now = new Date().toLocaleTimeString();
+  const current = els.prodQueryOutput.textContent || '';
+  const prefix = current.includes('\n') || !current.startsWith('Run get') ? `${current}\n` : '';
+  els.prodQueryOutput.textContent = `${prefix}[${now}] ${line}`.trim();
+  els.prodQueryOutput.scrollTop = els.prodQueryOutput.scrollHeight;
 }
 
 function renderStreamStatus(status) {
@@ -211,18 +205,6 @@ function renderStreamStatus(status) {
   setText('last-mismatches', fmtNum(status.mismatches));
   byId('last-mismatches').className = Number(status.mismatches || 0) === 0 ? 'pass' : 'fail';
 
-  const log = Array.isArray(status.log) ? status.log : [];
-  if (log.length) {
-    els.prodTrace.innerHTML = log.map((line) => `
-      <div class="step-row pass">
-        <div class="step-status">live</div>
-        <div>
-          <div class="step-name">${escapeHtml(line.split('|')[0] || 'operation')}</div>
-          <div class="step-detail">${escapeHtml(line)}</div>
-        </div>
-      </div>
-    `).join('');
-  }
 }
 
 async function refreshStreamStatus() {
@@ -244,7 +226,7 @@ async function startStream() {
     });
     await refreshStreamStatus();
   } catch (err) {
-    renderTrace([{phase: 'stream-error', detail: err.message}]);
+    appendProductionOutput(`stream-error | ${err.message}`);
   } finally {
     els.streamStart.disabled = false;
   }
@@ -256,7 +238,7 @@ async function stopStream() {
     await postJson('/api/stream/stop', {});
     await refreshStreamStatus();
   } catch (err) {
-    renderTrace([{phase: 'stream-error', detail: err.message}]);
+    appendProductionOutput(`stream-error | ${err.message}`);
   } finally {
     els.streamStop.disabled = false;
   }
@@ -266,16 +248,71 @@ async function resetProductionStore() {
   els.resetProduction.disabled = true;
   try {
     const result = await postJson('/api/production/reset', {});
-    els.prodRaw.textContent = JSON.stringify(result, null, 2);
-    renderTrace([{phase: 'production-reset', detail: 'flsm_production cleared; run a stream to generate fresh evidence'}]);
-    await refreshState(false);
+    appendProductionOutput(`production-reset | ${result.ok ? 'flsm_production cleared' : 'reset requested'}`);
+    await refreshState();
     await refreshStreamStatus();
   } catch (err) {
-    els.prodRaw.textContent = JSON.stringify({error: err.message}, null, 2);
-    renderTrace([{phase: 'reset-error', detail: err.message}]);
+    appendProductionOutput(`reset-error | ${err.message}`);
   } finally {
     els.resetProduction.disabled = false;
   }
+}
+
+function parseProductionCommand(input) {
+  const text = String(input || '').trim();
+  if (!text) throw new Error('Enter a command first.');
+  const [opRaw, ...rest] = text.split(/\s+/);
+  const op = opRaw.toLowerCase();
+  if (op === 'get') {
+    const key = rest.join(' ').trim();
+    if (!key) throw new Error('Usage: get <key>');
+    return {op, key};
+  }
+  if (op === 'del' || op === 'delete') {
+    const key = rest.join(' ').trim();
+    if (!key) throw new Error('Usage: del <key>');
+    return {op: 'delete', key};
+  }
+  if (op === 'put') {
+    const key = rest.shift();
+    const value = rest.join(' ');
+    if (!key || !rest.length) throw new Error('Usage: put <key> <value>');
+    return {op, key, value};
+  }
+  throw new Error('Supported commands: get <key>, del <key>, put <key> <value>');
+}
+
+async function runProductionCommand() {
+  els.prodRunCommand.disabled = true;
+  try {
+    const cmd = parseProductionCommand(els.prodCommand.value);
+    if (cmd.op === 'get') {
+      const result = await postJson('/api/get', {key: cmd.key});
+      if (result.found) {
+        const value = String(result.value || '');
+        appendProductionOutput(`FOUND ${cmd.key} | ${value.slice(0, 500)}${value.length > 500 ? '...' : ''}`);
+      } else {
+        appendProductionOutput(`NOT FOUND ${cmd.key}`);
+      }
+    } else if (cmd.op === 'delete') {
+      await postJson('/api/delete', {key: cmd.key});
+      appendProductionOutput(`DELETED ${cmd.key} | tombstone written`);
+    } else if (cmd.op === 'put') {
+      await postJson('/api/put', {key: cmd.key, value: cmd.value});
+      appendProductionOutput(`PUT ${cmd.key} | ${cmd.value.length} value bytes`);
+    }
+    await refreshState();
+    await refreshEngineTrace();
+  } catch (err) {
+    appendProductionOutput(`ERROR | ${err.message}`);
+  } finally {
+    els.prodRunCommand.disabled = false;
+  }
+}
+
+function setSampleMqttGet() {
+  els.prodCommand.value = 'get mqtt:factory/site_a/device/dev_0001/telemetry:1';
+  els.prodCommand.focus();
 }
 
 function renderEngineTerminal(trace) {
@@ -407,8 +444,19 @@ document.querySelectorAll('.tab-btn').forEach((button) => {
   });
 });
 
-els.refreshState.addEventListener('click', () => refreshState(true));
+els.refreshState.addEventListener('click', () => refreshState());
 els.resetProduction.addEventListener('click', resetProductionStore);
+els.prodRunCommand.addEventListener('click', runProductionCommand);
+els.prodSampleGet.addEventListener('click', setSampleMqttGet);
+els.prodClearOutput.addEventListener('click', () => {
+  els.prodQueryOutput.textContent = 'Output cleared. Run get, put, or del commands to verify production data.';
+});
+els.prodCommand.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    runProductionCommand();
+  }
+});
 els.streamStart.addEventListener('click', startStream);
 els.streamStop.addEventListener('click', stopStream);
 els.traceToggle.addEventListener('click', toggleEngineTrace);
@@ -421,7 +469,7 @@ refreshState();
 refreshStreamStatus();
 refreshEngineTrace();
 setInterval(() => {
-  refreshState(false);
+  refreshState();
   refreshStreamStatus();
   refreshEngineTrace();
 }, POLL_INTERVAL_MS);

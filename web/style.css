@@ -33,7 +33,8 @@ body {
 }
 
 button,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -172,6 +173,8 @@ pre {
 }
 
 .workload-panel,
+.query-panel,
+.mqtt-panel,
 .raw-panel,
 .evidence-panel,
 .trace-panel,
@@ -317,8 +320,51 @@ select {
   outline: none;
 }
 
-#experiment-script:focus {
+#experiment-script:focus,
+#prod-command:focus {
   border-color: var(--blue);
+}
+
+#prod-command {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #070a0e;
+  color: #d7e1eb;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  outline: none;
+}
+
+.query-actions {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.command-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #070a0e;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.command-card code {
+  display: block;
+  overflow-x: auto;
+  white-space: pre;
+  padding: 9px 10px;
+  border-radius: 5px;
+  background: #0e141b;
+  color: #d9e7f5;
 }
 
 .experiment-actions {
@@ -441,7 +487,7 @@ button:disabled {
   font-size: 12px;
 }
 
-#prod-raw,
+#prod-query-output,
 #experiment-raw,
 #engine-terminal {
   min-height: 360px;
@@ -457,8 +503,15 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+#prod-query-output {
+  min-height: 220px;
+  max-height: 340px;
+  color: #dbe8f4;
+}
+
 #engine-terminal {
   min-height: 300px;
+  height: 420px;
   max-height: 420px;
   color: #b8f2d0;
 }

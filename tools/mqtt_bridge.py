@@ -141,6 +141,29 @@ class Bridge:
             f"gets={self.gets}, errors={self.errors}",
             flush=True,
         )
+        try:
+            metrics = self.get_json("/api/metrics")
+            debug = self.get_json("/api/debug/state")
+            print(
+                "ForgeLSM database summary: "
+                f"puts={metrics.get('total_put_calls', 0)}, "
+                f"deletes={metrics.get('total_delete_calls', 0)}, "
+                f"gets={metrics.get('get_calls', 0)}, "
+                f"live_keys={debug.get('live_keys_estimate', 0)}, "
+                f"tombstones={debug.get('tombstones_estimate', 0)}, "
+                f"wal_bytes={debug.get('wal_bytes', 0)}, "
+                f"vlog_bytes={debug.get('vlog_bytes', 0)}, "
+                f"sst_files={debug.get('sst_files', 0)}",
+                flush=True,
+            )
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            print(f"ForgeLSM database summary unavailable: {exc}", file=sys.stderr, flush=True)
+
+    def get_json(self, path):
+        request = urllib.request.Request(self.engine + path, method="GET")
+        with urllib.request.urlopen(request, timeout=self.args.http_timeout) as response:
+            text = response.read().decode("utf-8")
+            return json.loads(text) if text else {}
 
 
 def main():
