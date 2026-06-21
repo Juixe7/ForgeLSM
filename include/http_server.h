@@ -83,6 +83,7 @@ inline const char* stream2_state_family(uint64_t operation_index, uint64_t op_bu
 //   GET  /api/debug/state   → Current storage state evidence (JSON)
 //   GET  /api/debug/files   → WAL/SSTable/VLog/Manifest file evidence (JSON)
 //   POST /api/put           → body: {"key":"k","value":"v"}
+//   POST /api/bulk/put      → body: {"records":[{"key":"k","value":"v"}]}
 //   POST /api/get           → body: {"key":"k"}
 //   POST /api/delete        → body: {"key":"k"}
 //   POST /api/bench         → body: {"type":"random_write","ops":500}
@@ -126,6 +127,7 @@ private:
     HttpResponse handle_trace_read();
     HttpResponse handle_trace_toggle(const HttpRequest& req);
     HttpResponse handle_put(const HttpRequest& req);
+    HttpResponse handle_bulk_put(const HttpRequest& req);
     HttpResponse handle_get(const HttpRequest& req);
     HttpResponse handle_delete(const HttpRequest& req);
     HttpResponse handle_bench(const HttpRequest& req);

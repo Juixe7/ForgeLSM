@@ -292,6 +292,7 @@ HttpResponse HttpServer::route(const HttpRequest& req) {
     }
     if (req.method == "POST") {
         if (req.path == "/api/put")    return handle_put(req);
+        if (req.path == "/api/bulk/put") return handle_bulk_put(req);
         if (req.path == "/api/get")    return handle_get(req);
         if (req.path == "/api/delete") return handle_delete(req);
         if (req.path == "/api/bench")  return handle_bench(req);
@@ -734,6 +735,95 @@ HttpResponse HttpServer::handle_put(const HttpRequest& req) {
     } catch (const std::exception& e) {
         resp.status = 500;
         resp.body   = std::string(R"({"error":)") + "\"" + json_escape(e.what()) + "\"}";
+    }
+    return resp;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// POST /api/bulk/put — {"records":[{"key":"k","value":"v"}]}
+// Used by the external MQTT bridge to reduce one-HTTP-call-per-message cost.
+// ─────────────────────────────────────────────────────────────────
+HttpResponse HttpServer::handle_bulk_put(const HttpRequest& req) {
+    HttpResponse resp;
+
+    auto records_pos = req.body.find("\"records\"");
+    if (records_pos == std::string::npos) {
+        resp.status = 400;
+        resp.body = R"({"error":"records array required"})";
+        return resp;
+    }
+    auto array_start = req.body.find('[', records_pos);
+    if (array_start == std::string::npos) {
+        resp.status = 400;
+        resp.body = R"({"error":"records array required"})";
+        return resp;
+    }
+
+    std::vector<std::pair<std::string, std::string>> records;
+    bool in_string = false;
+    bool escaped = false;
+    int depth = 0;
+    size_t object_start = std::string::npos;
+
+    for (size_t i = array_start + 1; i < req.body.size(); ++i) {
+        char c = req.body[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '{') {
+            if (depth == 0) object_start = i;
+            ++depth;
+        } else if (c == '}') {
+            if (depth > 0) --depth;
+            if (depth == 0 && object_start != std::string::npos) {
+                std::string object_json = req.body.substr(object_start, i - object_start + 1);
+                std::string key = json_get_str(object_json, "key");
+                std::string value = json_get_str(object_json, "value");
+                if (!key.empty() && json_has_key(object_json, "value")) {
+                    records.emplace_back(std::move(key), std::move(value));
+                }
+                object_start = std::string::npos;
+                if (records.size() > 500) {
+                    resp.status = 400;
+                    resp.body = R"({"error":"batch limit is 500 records"})";
+                    return resp;
+                }
+            }
+        } else if (c == ']' && depth == 0) {
+            break;
+        }
+    }
+
+    if (records.empty()) {
+        resp.status = 400;
+        resp.body = R"({"error":"no valid records found"})";
+        return resp;
+    }
+
+    try {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        for (const auto& record : records) {
+            store_.put(record.first, record.second);
+        }
+        std::ostringstream j;
+        j << "{";
+        j << json_bool("ok", true);
+        j << json_num("records_written", static_cast<uint64_t>(records.size()), true);
+        j << "}";
+        resp.body = j.str();
+    } catch (const std::exception& e) {
+        resp.status = 500;
+        resp.body = std::string(R"({"error":)") + "\"" + json_escape(e.what()) + "\"}";
     }
     return resp;
 }

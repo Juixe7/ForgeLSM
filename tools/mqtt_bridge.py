@@ -88,8 +88,11 @@ class Bridge:
         self.puts = 0
         self.deletes = 0
         self.gets = 0
+        self.batches = 0
         self.errors = 0
         self.stopped = False
+        self.pending_puts = []
+        self.last_flush = time.monotonic()
 
     def post_json(self, path, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -109,6 +112,7 @@ class Bridge:
         op = str(obj.get("op", "")).lower()
 
         if topic.endswith("/delete") or op == "delete":
+            self.flush_puts()
             key = target_key_for_message(topic, payload, self.received)
             response = self.post_json("/api/delete", {"key": key})
             self.deletes += 1
@@ -116,6 +120,7 @@ class Bridge:
             return
 
         if topic.endswith("/query") or op == "get":
+            self.flush_puts()
             key = target_key_for_message(topic, payload, self.received)
             response = self.post_json("/api/get", {"key": key})
             self.gets += 1
@@ -124,9 +129,35 @@ class Bridge:
 
         key = key_for_message(topic, payload, self.received)
         value = payload
-        response = self.post_json("/api/put", {"key": key, "value": value})
+        response = self.queue_put(key, value)
         self.puts += 1
         self.log("PUT", topic, key, response)
+
+    def queue_put(self, key, value):
+        if self.args.batch_size <= 1:
+            return self.post_json("/api/put", {"key": key, "value": value})
+
+        self.pending_puts.append({"key": key, "value": value})
+        now = time.monotonic()
+        age_ms = (now - self.last_flush) * 1000.0
+        if len(self.pending_puts) >= self.args.batch_size or age_ms >= self.args.flush_ms:
+            return self.flush_puts()
+        return {"status": "queued", "pending": len(self.pending_puts)}
+
+    def flush_puts(self):
+        if not self.pending_puts:
+            return {"status": "empty"}
+
+        records = self.pending_puts
+        self.pending_puts = []
+        self.last_flush = time.monotonic()
+
+        if len(records) == 1:
+            response = self.post_json("/api/put", records[0])
+        else:
+            response = self.post_json("/api/bulk/put", {"records": records})
+            self.batches += 1
+        return response
 
     def log(self, op, topic, key, response):
         if not self.args.verbose:
@@ -138,7 +169,7 @@ class Bridge:
         print(
             "MQTT bridge summary: "
             f"received={self.received}, puts={self.puts}, deletes={self.deletes}, "
-            f"gets={self.gets}, errors={self.errors}",
+            f"gets={self.gets}, batches={self.batches}, errors={self.errors}",
             flush=True,
         )
         try:
@@ -176,8 +207,16 @@ def main():
     parser.add_argument("--qos", type=int, default=0, choices=(0, 1, 2), help="MQTT subscription QoS")
     parser.add_argument("--limit", type=int, default=0, help="Stop after N received messages; 0 means forever")
     parser.add_argument("--http-timeout", type=float, default=10.0, help="HTTP request timeout in seconds")
+    parser.add_argument("--batch-size", type=int, default=50, help="Buffer this many put/update messages per HTTP bulk write; use 1 to disable")
+    parser.add_argument("--flush-ms", type=float, default=250.0, help="Flush queued put/update messages after this many milliseconds")
     parser.add_argument("--verbose", action="store_true", help="Print every translated operation")
     args = parser.parse_args()
+    if args.batch_size < 1:
+        args.batch_size = 1
+    if args.batch_size > 500:
+        args.batch_size = 500
+    if args.flush_ms < 1:
+        args.flush_ms = 1
 
     bridge = Bridge(args)
     client = make_client(args.client_id)
@@ -211,6 +250,11 @@ def main():
     try:
         client.loop_forever()
     finally:
+        try:
+            bridge.flush_puts()
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            bridge.errors += 1
+            print(f"[ERROR] final batch flush failed: {exc}", file=sys.stderr, flush=True)
         time.sleep(0.1)
         bridge.print_summary()
 

@@ -283,10 +283,10 @@ docker run --rm -it -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-
 Start the MQTT bridge:
 
 ```powershell
-python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --verbose
+python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --batch-size 100 --flush-ms 250
 ```
 
-The bridge prints an MQTT summary and a ForgeLSM database summary when it exits. Stop it with Ctrl+C after a live demo, or pass `--limit <n>` when you know how many MQTT messages will be published.
+The bridge batches put/update messages by default so one HTTP request can carry many MQTT records. Deletes and gets flush pending writes first, then execute immediately, preserving demo correctness. The bridge prints an MQTT summary and a ForgeLSM database summary when it exits. Stop it with Ctrl+C after a live demo, or pass `--limit <n>` when you know how many MQTT messages will be published.
 
 Publish deterministic IoT traffic:
 
@@ -327,7 +327,7 @@ docker compose up -d
 When Compose is used, run the Python bridge on the host with:
 
 ```powershell
-python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080
+python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --batch-size 100 --flush-ms 250
 ```
 
 Manual production query examples for the browser console:
