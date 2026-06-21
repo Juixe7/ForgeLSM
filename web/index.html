@@ -193,7 +193,7 @@
             <div>1. Start broker</div>
             <code>docker compose up -d mosquitto</code>
             <div>2. Start bridge</div>
-            <code>python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --verbose</code>
+            <code>python tools\mqtt_bridge.py --broker localhost --engine http://localhost:8080 --batch-size 100 --flush-ms 250</code>
             <div>3. Publish finite workload</div>
             <code>python tools\mqtt_publisher.py --broker localhost --events 10000 --devices 100</code>
             <div>4. Or publish live random traffic</div>

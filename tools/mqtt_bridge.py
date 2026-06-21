@@ -93,6 +93,7 @@ class Bridge:
         self.stopped = False
         self.pending_puts = []
         self.last_flush = time.monotonic()
+        self.started_at = time.monotonic()
 
     def post_json(self, path, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -117,6 +118,7 @@ class Bridge:
             response = self.post_json("/api/delete", {"key": key})
             self.deletes += 1
             self.log("DELETE", topic, key, response)
+            self.maybe_print_progress()
             return
 
         if topic.endswith("/query") or op == "get":
@@ -125,6 +127,7 @@ class Bridge:
             response = self.post_json("/api/get", {"key": key})
             self.gets += 1
             self.log("GET", topic, key, response)
+            self.maybe_print_progress()
             return
 
         key = key_for_message(topic, payload, self.received)
@@ -132,6 +135,7 @@ class Bridge:
         response = self.queue_put(key, value)
         self.puts += 1
         self.log("PUT", topic, key, response)
+        self.maybe_print_progress()
 
     def queue_put(self, key, value):
         if self.args.batch_size <= 1:
@@ -164,6 +168,21 @@ class Bridge:
             return
         status = response.get("status", "ok")
         print(f"[{op}] topic={topic} key={key} status={status}", flush=True)
+
+    def maybe_print_progress(self):
+        if self.args.progress_every <= 0:
+            return
+        if self.received % self.args.progress_every != 0:
+            return
+        elapsed = max(time.monotonic() - self.started_at, 0.001)
+        rate = self.received / elapsed
+        print(
+            "MQTT bridge progress: "
+            f"received={self.received}, puts={self.puts}, deletes={self.deletes}, "
+            f"gets={self.gets}, pending_puts={len(self.pending_puts)}, "
+            f"batches={self.batches}, rate={rate:.1f}/s",
+            flush=True,
+        )
 
     def print_summary(self):
         print(
@@ -201,7 +220,7 @@ def main():
     parser = argparse.ArgumentParser(description="Bridge an external MQTT broker into ForgeLSM.")
     parser.add_argument("--broker", default="localhost", help="MQTT broker host")
     parser.add_argument("--port", type=int, default=1883, help="MQTT broker port")
-    parser.add_argument("--topic", default="factory/+/device/+/+/#", help="MQTT subscription topic")
+    parser.add_argument("--topic", default="factory/#", help="MQTT subscription topic")
     parser.add_argument("--engine", default="http://localhost:8080", help="ForgeLSM HTTP base URL")
     parser.add_argument("--client-id", default="forgelsm-mqtt-bridge", help="MQTT client id")
     parser.add_argument("--qos", type=int, default=0, choices=(0, 1, 2), help="MQTT subscription QoS")
@@ -209,6 +228,7 @@ def main():
     parser.add_argument("--http-timeout", type=float, default=10.0, help="HTTP request timeout in seconds")
     parser.add_argument("--batch-size", type=int, default=50, help="Buffer this many put/update messages per HTTP bulk write; use 1 to disable")
     parser.add_argument("--flush-ms", type=float, default=250.0, help="Flush queued put/update messages after this many milliseconds")
+    parser.add_argument("--progress-every", type=int, default=1000, help="Print one progress line per N received messages; use 0 to disable")
     parser.add_argument("--verbose", action="store_true", help="Print every translated operation")
     args = parser.parse_args()
     if args.batch_size < 1:
